@@ -13,7 +13,7 @@ jobs:
   rust-checks:
     runs-on: ubuntu-latest
     container:
-      image: rust:slim
+      image: rust:latest
 
     steps:
     - uses: actions/checkout@v4
