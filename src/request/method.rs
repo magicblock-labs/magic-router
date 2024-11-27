@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use bytes::Bytes;
 use json::{lazyvalue, Deserialize, JsonValueTrait};
-use solana::{message::VersionedMessage, pubkey::Pubkey};
+use crate::solana::{Pubkey, VersionedMessage};
 
 use crate::{error::Error, request::Encoding, DELEGATION_PROGRAM_ID};
 

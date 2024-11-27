@@ -7,7 +7,7 @@ use serde::{
     de::{Error, Visitor},
     Deserializer,
 };
-use solana::pubkey::Pubkey;
+use crate::solana::Pubkey;
 use tracing_appender::rolling::Rotation;
 
 /// Deserialize solana Pubkey from base58 encoded string

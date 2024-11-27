@@ -13,7 +13,7 @@ use std::{
 };
 
 use flume::Sender;
-use solana::pubkey::Pubkey;
+use crate::solana::Pubkey;
 use tokio::{sync::mpsc::Sender as TokioSender, task::JoinHandle};
 
 use crate::{config::WebsocketConf, http::client::HttpClient};

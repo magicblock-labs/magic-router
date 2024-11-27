@@ -90,7 +90,7 @@ mod tests {
 
     use super::*;
     use json::from_slice;
-    use solana::pubkey::Pubkey;
+    use crate::solana::Pubkey;
 
     const ACCOUNT_NOTIFICATION: &[u8] = br#"{
             "jsonrpc": "2.0",

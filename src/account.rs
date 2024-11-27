@@ -3,7 +3,7 @@
 use std::ops::Deref;
 
 use json::Deserialize;
-use solana::pubkey::Pubkey;
+use crate::solana::Pubkey;
 
 use crate::utils::deserialize_pubkey_from_base58;
 use crate::DELEGATION_PROGRAM_ID;

@@ -39,9 +39,6 @@ zstd = "0.13"
 # synchronization
 flume = "0.11"
 
-# solana
-solana = { package = "solana-program", version = "2.1.1" }
-
 # containers
 scc = "2.2.5"
 bytes = "1.8"
@@ -54,6 +51,11 @@ tracing-subscriber = { version = "0.3", features = [ "env-filter", "json" ] }
 # misc 
 thiserror = "1.0"
 
+# solana
+pubkey = { package = "solana-pubkey", version = "2.1", default-features = false, features = [ "curve25519", "serde" ] }
+shortvec = { package = "solana-short-vec", version = "2.1" }
+solana-hash = { version = "2.1", default-features = false, features = [ "serde" ] }
+
 [profile.release]
 opt-level = 3
 # lto = "fat"               
@@ -61,3 +63,4 @@ codegen-units = 1
 panic = "abort"           
 # incremental = false           
 strip = "symbols"
+

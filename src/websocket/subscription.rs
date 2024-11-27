@@ -5,7 +5,7 @@ use std::sync::{
     Arc,
 };
 
-use solana::pubkey::Pubkey;
+use crate::solana::Pubkey;
 
 use crate::DELEGATION_PROGRAM_ID;
 
