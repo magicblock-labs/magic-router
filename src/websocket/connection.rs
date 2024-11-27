@@ -129,6 +129,8 @@ impl WsConnection {
                         continue;
                     }
                     let payload = msg.into_payload();
+
+                    // parse and handle received message
                     let msg = check!(WebsocketMessage::deserialize(&payload));
                     match msg {
                         WebsocketMessage::Subscribed(r) => {
@@ -151,6 +153,8 @@ impl WsConnection {
                                 Notification::Slot{ params } => {
                                     let slot = params.result.slot;
                                     let max = self.slot.fetch_max(slot, Ordering::Release);
+                                    // if this connection is lagging behind the leader (fastest connection)
+                                    // by more than `self.lag` slots, then reconnect
                                     if slot < max && max - slot > self.lag {
                                         tracing::warn!(lag=(max - slot), "connection to websocket is lagging slot-wise");
                                         self.reestablish().await;
@@ -162,13 +166,21 @@ impl WsConnection {
                                         continue;
                                     };
                                     if !params.result.is_delegated() {
+                                        // store delegation indicator immediately, cache cleanup
+                                        // via channel (self.tx) might take some time
                                         account.delegated.store(false, Ordering::Release);
                                         // infallible: checked above that subscription exists in self.active
                                         let account = self.active.remove(&params.subscription).unwrap();
+                                        // once the account has been undelegated, its delegation
+                                        // record is deleted and thus we are no longer interested
+                                        // in it, and we can safely unsubscribe
                                         self.unsubscribe(account.id, params.subscription).await;
+                                        // notify the cache gc about undelegation
                                         let _ = self.tx.send(account.pubkey).await;
                                         self.unsubs.insert(account.id, account);
                                     } else {
+                                        // TODO(bmuddha13): parse account and extract delegation
+                                        // identity of validator (for routing among multiple ERs)
                                         account.delegated.store(true, Ordering::Release);
                                     }
                                 }
@@ -183,12 +195,13 @@ impl WsConnection {
                 }
                 // process subscription requests
                 Ok(sub) = self.rx.recv_async() => {
-                    let msg = Message::text(sub.ws());
+                    let msg = sub.ws();
                     self.pending.insert(sub.id, sub);
-                    check!(self.inner.send(msg).await);
+                    self.send(msg).await;
                 }
                 // check if shutdown signal has been received
                 _ = crate::SHUTDOWN.notified() => {
+                    // unsubscribe from all active subscriptions
                     for (id, sub) in self.active.drain() {
                         let msg = format!(
                             r#"{{ "jsonrpc": "2.0", "id": {}, "method": "accountUnsubscribe", "params": [{id}] }}"#, sub.id
@@ -197,6 +210,7 @@ impl WsConnection {
                         let _ = self.inner.feed(msg).await;
                         sub.subscribed.store(false, Ordering::Release);
                     }
+                    // close underlying connection
                     let _ = self.inner.flush().await;
                     let _ = self.inner.close().await;
                     tracing::info!(url=%self.url, "shutting down websocket connection");

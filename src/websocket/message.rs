@@ -6,6 +6,7 @@ use crate::account::AccountInfo;
 
 /// Represents a WebSocket message received from the Solana blockchain.
 /// can be either a result of subscription with ID or an actual state update
+#[derive(Debug)]
 pub enum WebsocketMessage<'a> {
     /// A subscription result message.
     Subscribed(SubscriptionResult),
@@ -33,7 +34,7 @@ impl<'a> WebsocketMessage<'a> {
 }
 
 /// Represents the parameters of a notification message.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct NotificationParams<T> {
     /// Result of notification
     pub result: T,
@@ -42,7 +43,7 @@ pub struct NotificationParams<T> {
 }
 
 /// Represents a notification message received from the Solana blockchain.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(bound(deserialize = "'de: 'a"))]
 #[serde(tag = "method")]
 pub enum Notification<'a> {
@@ -61,7 +62,7 @@ pub enum Notification<'a> {
 }
 
 /// Represents a subscription result message.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct SubscriptionResult {
     /// ID of subscription request, not a subscription ID
     pub id: u64,
@@ -70,14 +71,14 @@ pub struct SubscriptionResult {
 }
 
 /// Represents an unsubscription result message.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct UnsubscriptionResult {
     /// ID of unsubscription request
     pub id: u64,
 }
 
 /// Represents the payload of slot notification.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct SlotInfo {
     /// current slot
     pub slot: u64,
@@ -88,10 +89,10 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use json::from_str;
+    use json::from_slice;
     use solana::pubkey::Pubkey;
 
-    const ACCOUNT_NOTIFICATION: &str = r#"{
+    const ACCOUNT_NOTIFICATION: &[u8] = br#"{
             "jsonrpc": "2.0",
             "method": "accountNotification",
             "params": {
@@ -114,9 +115,9 @@ mod tests {
                 "subscription": 23784
             }
         }"#;
-    const SUBSCRIPTION_RESULT: &str = r#"{ "jsonrpc": "2.0", "result": 23784, "id": 1 }"#;
-    const UNSUBSCRIPTION_RESULT: &str = r#"{ "jsonrpc": "2.0", "result": true, "id": 1 }"#;
-    const SLOT_NOTIFICATION: &str = r#"{
+    const SUBSCRIPTION_RESULT: &[u8] = br#"{ "jsonrpc": "2.0", "result": 23784, "id": 1 }"#;
+    const UNSUBSCRIPTION_RESULT: &[u8] = br#"{ "jsonrpc": "2.0", "result": true, "id": 1 }"#;
+    const SLOT_NOTIFICATION: &[u8] = br#"{
         "jsonrpc": "2.0",
         "method": "slotNotification",
         "params": {
@@ -131,20 +132,20 @@ mod tests {
 
     #[test]
     fn test_deserialize_subscription_result() {
-        let message: SubscriptionResult = from_str(SUBSCRIPTION_RESULT).unwrap();
+        let message: SubscriptionResult = from_slice(SUBSCRIPTION_RESULT).unwrap();
         assert_eq!(message.id, 1);
         assert_eq!(message.result, 23784);
     }
 
     #[test]
     fn test_deserialize_unsubscription_result() {
-        let message: UnsubscriptionResult = from_str(UNSUBSCRIPTION_RESULT).unwrap();
+        let message: UnsubscriptionResult = from_slice(UNSUBSCRIPTION_RESULT).unwrap();
         assert_eq!(message.id, 1);
     }
 
     #[test]
     fn test_deserialize_account_notification() {
-        let message: Notification = from_str(ACCOUNT_NOTIFICATION).unwrap();
+        let message: Notification = from_slice(ACCOUNT_NOTIFICATION).unwrap();
         if let Notification::Account { params } = message {
             assert_eq!(params.subscription, 23784);
             let AccountInfo { value } = params.result;
@@ -160,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_slot_notification() {
-        let message: Notification = from_str(SLOT_NOTIFICATION).unwrap();
+        let message: Notification = from_slice(SLOT_NOTIFICATION).unwrap();
         if let Notification::Slot { params } = message {
             assert_eq!(params.subscription, 0);
             let SlotInfo { slot } = params.result;
@@ -172,16 +173,16 @@ mod tests {
 
     #[test]
     fn test_deserialize_ws_message() {
-        let mut msg = WebsocketMessage::deserialize(SUBSCRIPTION_RESULT.as_bytes());
+        let mut msg = WebsocketMessage::deserialize(SUBSCRIPTION_RESULT);
         assert!(matches!(msg, Ok(WebsocketMessage::Subscribed(_))));
-        msg = WebsocketMessage::deserialize(UNSUBSCRIPTION_RESULT.as_bytes());
+        msg = WebsocketMessage::deserialize(UNSUBSCRIPTION_RESULT);
         assert!(matches!(msg, Ok(WebsocketMessage::Unsubscribed(_))));
-        msg = WebsocketMessage::deserialize(ACCOUNT_NOTIFICATION.as_bytes());
+        msg = WebsocketMessage::deserialize(ACCOUNT_NOTIFICATION);
         assert!(matches!(
             msg,
             Ok(WebsocketMessage::Notification(Notification::Account { .. }))
         ));
-        msg = WebsocketMessage::deserialize(SLOT_NOTIFICATION.as_bytes());
+        msg = WebsocketMessage::deserialize(SLOT_NOTIFICATION);
         assert!(matches!(
             msg,
             Ok(WebsocketMessage::Notification(Notification::Slot { .. }))

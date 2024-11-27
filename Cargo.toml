@@ -16,7 +16,7 @@ keywords = ["solana", "crypto", "delegation", "ephemeral-rollups", "magicblock"]
 tokio = { version = "1.0", features = [ "rt-multi-thread", "sync", "net", "macros", "signal" ] }
 futures = "0.3"
 
-# net
+# network
 hyper = { version = "1.0", features = [ "full" ] }
 hyper-util = { version = "0.1", features = [ "server-auto" ] }
 reqwest = { version = "0.12", default-features = false, features = [ "http2", "default-tls" ] }

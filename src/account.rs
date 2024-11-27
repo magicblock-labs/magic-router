@@ -2,7 +2,7 @@
 
 use std::ops::Deref;
 
-use json::{lazyvalue, Deserialize};
+use json::Deserialize;
 use solana::pubkey::Pubkey;
 
 use crate::utils::deserialize_pubkey_from_base58;
@@ -18,7 +18,7 @@ pub struct GetAccountInfoResponse<'a> {
 }
 
 /// Wrapper around actual account state, used for deserialization
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(bound(deserialize = "'de: 'a"))]
 pub struct AccountInfo<'a> {
     /// actual account state
@@ -34,7 +34,7 @@ impl<'a> Deref for AccountInfo<'a> {
 }
 
 /// State of account with extracted relevant fields.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(bound(deserialize = "'de: 'a"))]
 pub struct AccountValue<'a> {
     /// Account owner
@@ -45,7 +45,7 @@ pub struct AccountValue<'a> {
     // FIXME(bmuddha13): parse it to obtain delegation record data
     /// reference to underlying memory containing JSON serialization
     #[allow(unused)]
-    pub data: lazyvalue::LazyValue<'a>,
+    pub data: [&'a str; 2],
 }
 
 impl<'a> AccountValue<'a> {
@@ -57,7 +57,7 @@ impl<'a> AccountValue<'a> {
     // FIXME(bmuddha13): use once we need to extract delegation related info
     /// Deserializes data field of account and decodes it based on specified encoding
     #[allow(unused)]
-    pub fn data(&self) -> Vec<u8> {
+    pub fn data(&self, buf: &mut [u8]) {
         // implement deserialization/decoding
         todo!()
     }
