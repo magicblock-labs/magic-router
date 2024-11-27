@@ -13,10 +13,12 @@ jobs:
   rust-checks:
     runs-on: ubuntu-latest
     container:
-      image: rust:latest
+      image: rust:slim
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install rustfmt and clippy
+      run: rustup component install rustfmt clippy
     - name: Run rustfmt
       run: cargo fmt --check
     - name: Run clippy
