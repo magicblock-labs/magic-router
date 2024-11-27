@@ -9,14 +9,19 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-jobs:
-  rust-checks:
-    runs-on: ubuntu-latest
+defaults:
+  runs:
     container:
       image: rust:alpine
 
+jobs:
+  rust-checks:
+    runs-on: ubuntu-latest
+
     steps:
     - uses: actions/checkout@v4
+    - name: Install rustfmt and clippy
+      run: rustup component add rustfmt clippy
     - name: Run rustfmt
       run: cargo fmt --check
     - name: Run clippy
@@ -24,13 +29,13 @@ jobs:
 
   test-and-build:
     runs-on: ubuntu-latest
-    container:
-      image: rust:latest
 
     needs: rust-checks
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install rustfmt and clippy
+      run: rustup component add rustfmt clippy
     - name: Run tests
       run: cargo test 
     - name: Build release
