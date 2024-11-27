@@ -9,14 +9,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-defaults:
-  runs:
-    container:
-      image: rust:alpine
-
 jobs:
   rust-checks:
     runs-on: ubuntu-latest
+    container:
+      image: rust:lates
 
     steps:
     - uses: actions/checkout@v4
@@ -29,6 +26,8 @@ jobs:
 
   test-and-build:
     runs-on: ubuntu-latest
+    container:
+      image: rust:lates
 
     needs: rust-checks
 
@@ -40,4 +39,3 @@ jobs:
       run: cargo test 
     - name: Build release
       run: cargo build --release
-
