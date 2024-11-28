@@ -11,7 +11,7 @@ use tokio::sync::mpsc::Receiver;
 
 use crate::websocket::pool::WebsocketPool;
 
-/// Cheaply clonable cache for delegation status of accounts
+/// Cheaply clonable cache (meant to be used concurrently) for delegation status of accounts
 #[derive(Clone)]
 pub struct AccountsCache {
     /// handle for the pool of websocket connections, that can be used

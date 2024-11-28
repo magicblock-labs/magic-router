@@ -14,13 +14,13 @@
 //! This delegation based routing is primarily achieved via caching status of accounts which router
 //! encounters, and keeping them up to date via websocket subscriptions to base layer.
 
+use crate::solana::Pubkey;
 use cache::AccountsCache;
 use config::Configuration;
 use error::InternalError;
 use http::client::HttpClient;
 use request::handler::Accessors;
 use server::Server;
-use crate::solana::Pubkey;
 use tokio::{
     signal::unix::SignalKind,
     sync::{mpsc, Notify},
@@ -38,14 +38,18 @@ static SHUTDOWN: Notify = Notify::const_new();
 async fn main() -> Result<()> {
     let config = Configuration::open().map_err(InternalError::from)?;
     let _log_guard = logging::init(config.logging);
+    tracing::info!("configuration file has been parsed");
 
     let chain = HttpClient::new(config.chain);
     let ephem = HttpClient::new(config.ephem);
+
+    tracing::info!("initiated chain/ephem HTTP clients");
 
     let undelegations = mpsc::channel(1 << 8);
 
     let (wspool, wsconnections) =
         WebsocketPool::new(config.websocket, chain.clone(), undelegations.0).await?;
+    tracing::info!("created connections to websocket pools");
     let cache = AccountsCache::new(wspool, undelegations.1);
     let accessors = Accessors::new(chain, ephem, cache);
 
@@ -58,6 +62,7 @@ async fn main() -> Result<()> {
         tracing::info!("received SIGTERM from system, initiating shutdown...");
         SHUTDOWN.notify_waiters()
     });
+    tracing::info!("registered SIGTERM handler");
 
     server.run().await;
     Ok(())

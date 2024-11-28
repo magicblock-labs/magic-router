@@ -1,9 +1,9 @@
 //! module for working with requests received from client
 
+use crate::solana::Pubkey;
 use bytes::Bytes;
 use json::{lazyvalue, Deserialize, LazyValue};
 use method::RequestMethod;
-use crate::solana::Pubkey;
 
 use crate::error::Error;
 
@@ -20,6 +20,9 @@ pub struct Request {
 impl Request {
     /// Construct Request by partial parsing the body
     pub fn new(payload: Bytes) -> super::Result<Self> {
+        println!("REQUEST: {}", unsafe {
+            std::str::from_utf8_unchecked(&payload)
+        });
         let meta = {
             let method: LazyValue =
                 lazyvalue::get(&payload, &[METHOD_KEY]).map_err(|_| Error::InvalidRequest)?;
@@ -41,6 +44,8 @@ pub enum TransactionAction {
 
 /// Optimization type which avoids allocations when only one pubkey is used in request
 pub enum Pubkeys {
+    /// request doesn't contain any pubkeys
+    None,
     /// single pubkey is used in request
     Single(Pubkey),
     /// multiple pubkey are used in request
@@ -67,6 +72,7 @@ impl<'a> Iterator for PubkeysIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.inner {
+            Pubkeys::None => None,
             Pubkeys::Single(pk) => {
                 if self.index == 0 {
                     self.index += 1;

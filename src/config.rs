@@ -127,3 +127,58 @@ pub enum LogFormat {
     /// Format the output as JSON
     Json,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        net::{IpAddr, Ipv4Addr},
+    };
+
+    #[test]
+    fn test_configuration_parsing() {
+        let config_toml =
+            fs::read_to_string("config.example.toml").expect("Failed to read config.example.toml");
+
+        let config: Configuration = toml::from_str(&config_toml)
+            .expect("Failed to parse Configuration from config.example.toml");
+
+        // Check some basic assertions to ensure parsing is correct
+        assert_eq!(
+            config.server.bind.ip(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert!(matches!(config.logging.format, LogFormat::Plain));
+        assert!(matches!(config.logging.mode, LoggingMode::Stdout));
+        assert!(config.chain.endpoint.has_host());
+        assert_eq!(config.websocket.endpoints.len(), 2);
+    }
+    #[test]
+    fn test_rotation_parsing() {
+        let test_cases = vec![
+            (r#"rotation = "minutely""#, Rotation::MINUTELY),
+            (r#"rotation = "hourly""#, Rotation::HOURLY),
+            (r#"rotation = "daily""#, Rotation::DAILY),
+            (r#"rotation = "never""#, Rotation::NEVER),
+        ];
+
+        for (input, expected) in test_cases {
+            let toml_str = format!(
+                r#"
+                format = "json"
+                mode = {{ rotating = {{ dir = "/var/log/router/", {} }} }}
+                "#,
+                input
+            );
+
+            let logging_conf: LoggingConf =
+                toml::from_str(&toml_str).expect("Failed to parse TOML");
+            if let LoggingMode::Rotating { rotation, .. } = logging_conf.mode {
+                assert_eq!(rotation, expected);
+            } else {
+                panic!("Expected rotating logging mode");
+            }
+        }
+    }
+}

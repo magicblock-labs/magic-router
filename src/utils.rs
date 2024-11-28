@@ -2,12 +2,12 @@
 
 use std::{fmt, str::FromStr, time::Duration};
 
+use crate::solana::Pubkey;
 use json::Deserialize;
 use serde::{
     de::{Error, Visitor},
     Deserializer,
 };
-use crate::solana::Pubkey;
 use tracing_appender::rolling::Rotation;
 
 /// Deserialize solana Pubkey from base58 encoded string
@@ -55,6 +55,6 @@ pub fn deserialize_duration<'de, D>(deserializer: D) -> Result<Duration, D::Erro
 where
     D: Deserializer<'de>,
 {
-    let string = <&str as Deserialize>::deserialize(deserializer)?;
-    humantime::parse_duration(string).map_err(D::Error::custom)
+    let string = String::deserialize(deserializer)?;
+    humantime::parse_duration(&string).map_err(D::Error::custom)
 }

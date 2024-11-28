@@ -55,6 +55,7 @@ thiserror = "1.0"
 pubkey = { package = "solana-pubkey", version = "2.1", default-features = false, features = [ "curve25519", "serde" ] }
 shortvec = { package = "solana-short-vec", version = "2.1" }
 solana-hash = { version = "2.1", default-features = false, features = [ "serde" ] }
+solana-sdk = "2.1"
 
 [profile.release]
 opt-level = 3

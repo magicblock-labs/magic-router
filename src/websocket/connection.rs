@@ -9,9 +9,9 @@ use std::{
     time::Duration,
 };
 
+use crate::solana::Pubkey;
 use flume::Receiver;
 use futures::{SinkExt, StreamExt};
-use crate::solana::Pubkey;
 use tokio::{net::TcpStream, sync::mpsc::Sender, time::Interval};
 use url::Url;
 use websocket::{ClientBuilder, MaybeTlsStream, Message, Payload, WebSocketStream};
@@ -106,7 +106,7 @@ impl WsConnection {
                 match $result {
                     Ok(value) => value,
                     Err(error) => {
-                        tracing::warn!(%error, "websocket message handling error, reconnecting");
+                        tracing::warn!(%error, "websocket message handling");
                         self.reestablish().await;
                         continue;
                     }
@@ -221,7 +221,7 @@ impl WsConnection {
     }
 
     async fn reestablish(&mut self) {
-        tracing::info!(url=%self.url.as_str(), sub=self.active.len(), "reconnecting to websocket stream");
+        tracing::info!(url=%self.url.as_str(), subcount=self.active.len(), "reconnecting to websocket stream");
         let _ = self.inner.close().await;
         for sub in self.active.values_mut().chain(self.pending.values_mut()) {
             sub.subscribed.store(false, Ordering::Release);
@@ -284,6 +284,7 @@ impl WsConnection {
             });
         }
         let _ = self.inner.flush().await;
+        tracing::info!(url=%self.url.as_str(), "reconnection to websocket stream succeeded");
     }
 
     async fn unsubscribe(&mut self, id: u64, subid: u64) {

@@ -54,3 +54,28 @@ pub enum ConfigError {
     #[error("deserialization error reading config: {0}")]
     Serde(#[from] toml::de::Error),
 }
+
+impl From<Error> for hyper::Response<reqwest::Body> {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Io(_) | Error::HttpServer(_) | Error::HttpClient(_) | Error::Ws(_) => {
+                hyper::Response::builder()
+                    .status(hyper::StatusCode::BAD_GATEWAY)
+                    .body(reqwest::Body::from("Upstream service error"))
+                    .unwrap()
+            }
+            Error::UnsupportedMethod => hyper::Response::builder()
+                .status(hyper::StatusCode::METHOD_NOT_ALLOWED)
+                .body(reqwest::Body::from("JSON-RPC Method not supported"))
+                .unwrap(),
+            Error::InvalidRequest => hyper::Response::builder()
+                .status(hyper::StatusCode::BAD_REQUEST)
+                .body(reqwest::Body::from("Invalid request"))
+                .unwrap(),
+            Error::Internal(_) => hyper::Response::builder()
+                .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(reqwest::Body::from("Internal server error"))
+                .unwrap(),
+        }
+    }
+}

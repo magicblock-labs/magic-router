@@ -46,10 +46,15 @@ impl Server {
 
     /// Run the server and serve incoming connections until SIGTERM is received
     pub async fn run(mut self) {
+        tracing::info!(
+            "!!!!! SERVER STARTED LISTENING on {} !!!!!",
+            self.listener.local_addr().unwrap(),
+        );
         loop {
             tokio::select! {
                 // hanlde new incoming tcp connections
                 biased; Ok((mut stream, _addr)) = self.listener.accept() => {
+                    tracing::info!("accepted connection from {_addr}");
                     let builder = auto::Builder::new(TokioExecutor::new());
                     if !self.stopping {
                         // we are in normal operation mode

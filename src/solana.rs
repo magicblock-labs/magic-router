@@ -133,4 +133,48 @@ impl VersionedMessage {
             Self::V0(message) => &message.instructions,
         }
     }
+
+    /// custom method to return all writeable account pubkeys
+    pub fn writable_account_keys(&self) -> Vec<Pubkey> {
+        match self {
+            Self::Legacy(tx) => tx.writable_account_keys().copied().collect(),
+            Self::V0(tx) => tx.writable_account_keys().copied().collect(),
+        }
+    }
+}
+
+impl LegacyMessage {
+    /// custom method to return iterator over all writeable account keys
+    pub fn writable_account_keys(&self) -> impl Iterator<Item = &Pubkey> {
+        // Get writable signed accounts
+        let num_writable_signed =
+            self.header.num_required_signatures - self.header.num_readonly_signed_accounts;
+        let writable_signed = &self.account_keys[0..num_writable_signed as usize];
+
+        // Get writable unsigned accounts (like PDAs)
+        let writable_unsigned_start = self.header.num_required_signatures as usize;
+        let writable_unsigned_end =
+            self.account_keys.len() - self.header.num_readonly_unsigned_accounts as usize;
+        let writable_unsigned = &self.account_keys[writable_unsigned_start..writable_unsigned_end];
+
+        writable_signed.into_iter().chain(writable_unsigned)
+    }
+}
+
+impl V0Message {
+    /// custom method to return iterator over all writeable account keys
+    pub fn writable_account_keys(&self) -> impl Iterator<Item = &Pubkey> {
+        // Get writable signed accounts
+        let num_writable_signed =
+            self.header.num_required_signatures - self.header.num_readonly_signed_accounts;
+        let writable_signed = &self.account_keys[0..num_writable_signed as usize];
+
+        // Get writable unsigned accounts (like PDAs)
+        let writable_unsigned_start = self.header.num_required_signatures as usize;
+        let writable_unsigned_end =
+            self.account_keys.len() - self.header.num_readonly_unsigned_accounts as usize;
+        let writable_unsigned = &self.account_keys[writable_unsigned_start..writable_unsigned_end];
+
+        writable_signed.into_iter().chain(writable_unsigned)
+    }
 }

@@ -2,8 +2,8 @@
 
 use std::ops::Deref;
 
-use json::Deserialize;
 use crate::solana::Pubkey;
+use json::Deserialize;
 
 use crate::utils::deserialize_pubkey_from_base58;
 use crate::DELEGATION_PROGRAM_ID;
@@ -60,5 +60,55 @@ impl<'a> AccountValue<'a> {
     pub fn data(&self, buf: &mut [u8]) {
         // implement deserialization/decoding
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const OWNER: &str = "11111111111111111111111111111111";
+    const ACCOUNT_INFO_RESPONSE: &[u8] = br#"{
+      "jsonrpc": "2.0",
+      "result": {
+        "context": { "apiVersion": "2.0.15", "slot": 341197053 },
+        "value": {
+          "data": ["", "base58"],
+          "executable": false,
+          "lamports": 88849814690250,
+          "owner": "11111111111111111111111111111111",
+          "rentEpoch": 18446744073709551615,
+          "space": 0
+        }
+      },
+      "id": 1
+    }"#;
+    const NULL_RESPONSE: &[u8] = br#"{
+      "jsonrpc": "2.0",
+      "result": null,
+      "id": 1
+    }"#;
+
+    #[test]
+    fn test_deserialize_account_respone() {
+        let response: GetAccountInfoResponse = json::from_slice(ACCOUNT_INFO_RESPONSE).unwrap();
+        assert!(
+            response.result.is_some(),
+            "account info result should be present"
+        );
+        let account = response.result.unwrap();
+
+        assert_eq!(account.owner.to_string(), OWNER);
+        assert_eq!(account.lamports, 88849814690250);
+        assert_eq!(account.data[0], "");
+        assert_eq!(account.data[1], "base58");
+    }
+
+    #[test]
+    fn test_deserialize_null_response() {
+        let response: GetAccountInfoResponse = json::from_slice(NULL_RESPONSE).unwrap();
+        assert!(
+            response.result.is_none(),
+            "account info result should be absent"
+        );
     }
 }
