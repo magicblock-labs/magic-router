@@ -1,0 +1,49 @@
+# incoming connection handling specific configuration
+[server]
+# TCP listen address
+bind = "127.0.0.1:9001"
+
+# Logging configuration
+[logging]
+# The format for log messages: "plain" or "json"
+format = "plain"
+# The log level to use (optional, will use ENV if not provided), can be specified on crate/module level
+level = "info"
+# The logging mode: "stdout", "file", or "rotating"
+mode ="stdout"
+# mode = { path = "/var/log/router.log" }
+# possible rotation values are: minutely, hourly, daily, never
+# mode = { rotating = { dir = "/var/log/router/", rotation = "daily" } }
+
+# Configuration of client connections to base chain
+[chain]
+# The endpoint URL for the client
+endpoint = "https://api.devnet.solana.com"
+# The timeout duration for the client
+timeout = "45s"
+# The keepalive duration for the client 
+keepalive = "2m"
+
+# Configuration of client connections to ephemeral rollups
+[ephem]
+# The endpoint URL for the client
+endpoint = "https://devnet.magicblock.app"
+# The timeout duration for the client 
+timeout = "30s"
+# The keepalive duration for the client 
+keepalive = "1m 15s"
+
+# Websocket connection pool configuration
+[websocket]
+# The interval at which ping messages are sent to keep the connection alive in seconds
+ping-interval = "3s"
+# The maximum allowed slot lag for a connection before it is considered stale
+# when exceeded it will trigger reconnection
+max-slot-lag = 150
+# The maximum number of subscriptions that can be queued before request processing is halted
+max-queued-subs = 256
+
+# The list of WebSocket endpoint URLs and the number of connections for each
+[[websocket.endpoints]]
+url = "wss://api.devnet.solana.com"
+connections = 1
