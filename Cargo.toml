@@ -52,10 +52,7 @@ tracing-subscriber = { version = "0.3", features = [ "env-filter", "json" ] }
 thiserror = "1.0"
 
 # solana
-pubkey = { package = "solana-pubkey", version = "2.1", default-features = false, features = [ "curve25519", "serde" ] }
-shortvec = { package = "solana-short-vec", version = "2.1" }
-solana-hash = { version = "2.1", default-features = false, features = [ "serde" ] }
-solana-sdk = "2.1"
+solana = { package = "solana-sdk", version = "2.1" }
 
 [profile.release]
 opt-level = 3

@@ -14,13 +14,13 @@
 //! This delegation based routing is primarily achieved via caching status of accounts which router
 //! encounters, and keeping them up to date via websocket subscriptions to base layer.
 
-use crate::solana::Pubkey;
 use cache::AccountsCache;
 use config::Configuration;
 use error::InternalError;
 use http::client::HttpClient;
 use request::handler::Accessors;
 use server::Server;
+use solana::pubkey::Pubkey;
 use tokio::{
     signal::unix::SignalKind,
     sync::{mpsc, Notify},
@@ -76,6 +76,5 @@ pub mod http;
 pub mod logging;
 pub mod request;
 pub mod server;
-pub mod solana;
 pub mod utils;
 pub mod websocket;

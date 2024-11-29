@@ -2,12 +2,12 @@
 
 use std::{fmt, str::FromStr, time::Duration};
 
-use crate::solana::Pubkey;
 use json::Deserialize;
 use serde::{
     de::{Error, Visitor},
     Deserializer,
 };
+use solana::pubkey::Pubkey;
 use tracing_appender::rolling::Rotation;
 
 /// Deserialize solana Pubkey from base58 encoded string

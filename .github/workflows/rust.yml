@@ -1,8 +1,6 @@
-name: Rust
+name: Magic Router Build
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
@@ -10,13 +8,48 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  rust-checks:
     runs-on: ubuntu-latest
+    container:
+      image: rust:latest
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
+    - uses: actions/cache@v3
+      with:
+        path: target/debug
+        key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-debug-
+    - name: Install rustfmt and clippy
+      run: rustup component add rustfmt clippy
+    - name: Run rustfmt
+      run: cargo fmt --check
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+
+  test-and-build:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:latest
+  
+    needs: rust-checks
+  
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/cache@v3
+      with:
+        path: target/debug
+        key: ${{ runner.os }}-cargo-debug-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-debug-
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test
+    - uses: actions/cache@v3
+      with:
+        path: target/release
+        key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-release-
+    - name: Build release
+      run: cargo build --release
