@@ -16,7 +16,7 @@ use flume::Sender;
 use solana::pubkey::Pubkey;
 use tokio::{sync::mpsc::Sender as TokioSender, task::JoinHandle};
 
-use crate::{config::WebsocketConf, http::client::HttpClient};
+use crate::{config::WebsocketConf, http::HttpClient};
 
 use super::{connection::WsConnection, subscription::AccountSubscription};
 

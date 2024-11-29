@@ -2,14 +2,13 @@
 
 use std::str::FromStr;
 
-use bytes::Bytes;
 use json::{lazyvalue, Deserialize, JsonValueTrait};
 use solana::pubkey::Pubkey;
 use solana::transaction::{Transaction, VersionedTransaction};
 
-use crate::{error::Error, request::Encoding, DELEGATION_PROGRAM_ID};
+use crate::{error::Error, request::Encoding};
 
-use super::{Pubkeys, RequestMeta, TransactionAction};
+use super::Pubkeys;
 
 const PARAMS_KEY: &str = "params";
 const ENCODING_KEY: &str = "encoding";
@@ -36,11 +35,16 @@ pub enum RequestMethod {
 
 impl RequestMethod {
     /// Partially parse request body and extract account related meta data
-    pub fn meta(&self, payload: &Bytes) -> crate::Result<RequestMeta> {
+    pub fn pubkeys(&self, payload: &[u8]) -> crate::Result<Pubkeys> {
         macro_rules! logerr {
             ($reason: expr) => {
                 |error| {
+                    #[cfg(test)]
+                    eprintln!("{}: {error}", $reason);
+
+                    #[cfg(not(test))]
                     tracing::warn!(%error, $reason);
+
                     Error::InvalidRequest
                 }
             };
@@ -50,7 +54,7 @@ impl RequestMethod {
             lazyvalue::get(payload, &[&PARAMS_KEY]).map_err(logerr!("params key missing"))?;
 
         match self {
-            Self::GetLatestBlockhash => Ok(RequestMeta::ReadOnly(Pubkeys::None)),
+            Self::GetLatestBlockhash => Ok(Pubkeys::None),
             Self::GetAccountInfo | Self::GetBalance | Self::GetTokenAccountBalance => params
                 // these requests always contain the pubkey as a first argument of request
                 .get(0)
@@ -59,12 +63,10 @@ impl RequestMethod {
                         .and_then(|s| Pubkey::from_str(s).map_err(logerr!("pubkey parsing")).ok())
                 })
                 .map(Pubkeys::Single)
-                .map(RequestMeta::ReadOnly)
                 .ok_or(Error::InvalidRequest),
             Self::SendTransaction | Self::SimulateTransaction => {
                 // we cannot parse encoding string representing
                 // transaction without knowing the encoding used
-                tracing::info!("params: {params}");
                 let encoding = if let Some(config) = params.get(1) {
                     config
                         .get(ENCODING_KEY)
@@ -115,45 +117,7 @@ impl RequestMethod {
                         .map_err(logerr!("bincode deserializing transaction"))?
                 };
                 let accounts = tx.message.static_account_keys();
-                let mut delegatable = None;
-
-                // TODO/NOTES: this is highly hacky and unreliable method to figure out whether
-                // account will be delegated or not, better way would be to subscribe to delegation
-                // program and get updates on all accounts that get delegated, fetch their
-                // delegation records afterwards and listen to changes on those, thus we don't have
-                // to use this hack/approach
-
-                // scan all accounts used in transaction, and try to find delegation program among
-                // those, collect all writable accounts if found
-                for pubkey in accounts {
-                    if *pubkey == DELEGATION_PROGRAM_ID {
-                        for (i, _) in accounts.iter().enumerate() {
-                            if tx.message.is_maybe_writable(i, None) {
-                                match &mut delegatable {
-                                    None => {
-                                        delegatable.replace(Pubkeys::Single(accounts[i]));
-                                    }
-                                    Some(Pubkeys::Single(pk)) => {
-                                        let prev = *pk;
-                                        delegatable
-                                            .replace(Pubkeys::Multiple(vec![prev, accounts[i]]));
-                                    }
-                                    Some(Pubkeys::Multiple(list)) => list.push(accounts[i]),
-                                    _ => unreachable!(),
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-
-                // if no mentions of delegation program are found, just collect all accounts used by transaction
-                let action = delegatable
-                    .map(TransactionAction::Delegates)
-                    .unwrap_or_else(|| {
-                        TransactionAction::References(Pubkeys::Multiple(accounts.to_vec()))
-                    });
-                Ok(RequestMeta::Transaction(action))
+                Ok(Pubkeys::Multiple(accounts.to_vec()))
             }
             Self::GetMultipleAccounts => {
                 // extract the first argument which is an array of Pubkey
@@ -161,16 +125,120 @@ impl RequestMethod {
 
                 let mut pks = Vec::new();
                 for i in 0..100 {
-                    let pk = pubkeys
-                        .get(i)
-                        .and_then(|v| v.as_str().and_then(|s| Pubkey::from_str(s).ok()))
-                        .ok_or(Error::InvalidRequest)?;
-                    pks.push(pk);
+                    if let Some(pk) = pubkeys.get(i) {
+                        let pk = pk
+                            .as_str()
+                            .and_then(|s| Pubkey::from_str(s).ok())
+                            .ok_or(Error::InvalidRequest)?;
+                        pks.push(pk);
+                    }
                 }
-                Ok(RequestMeta::ReadOnly(Pubkeys::Multiple(pks)))
+                Ok(Pubkeys::Multiple(pks))
             }
         }
     }
 }
 
-// TODO: write parser tests
+#[cfg(test)]
+mod tests {
+    use solana::{
+        hash::Hash, pubkey::Pubkey, signature::Keypair, signer::Signer,
+        system_instruction::transfer,
+    };
+
+    const ACCOUNT1: Pubkey = solana::pubkey!("vines1vzrYbzLMRdu58ou5XTby4qAqVRLmqo36NKPTg");
+    const ACCOUNT2: Pubkey = solana::pubkey!("4fYNw3dojWmQ4dXtSGE9epjRGy9pFSx62YypT7avPYvA");
+    use super::*;
+
+    macro_rules! jsonrpc {
+        ($method: literal, $params: expr) => {
+            jsonrpc!($method, $params, "base58")
+        };
+        ($method: literal, $params: expr, $encoding: expr) => {
+            json::json! {{
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": $method,
+                "params": [$params, { "encoding":  $encoding }]
+            }}
+            .to_string()
+            .into_bytes()
+        };
+    }
+
+    #[test]
+    fn parse_get_account_info() {
+        let string = jsonrpc!("getAccountInfo", ACCOUNT1.to_string());
+        let pubkeys = RequestMethod::GetAccountInfo.pubkeys(&string).unwrap();
+        assert!(matches!(pubkeys, Pubkeys::Single(ACCOUNT1)));
+    }
+
+    #[test]
+    fn parse_get_balance() {
+        let string = jsonrpc!("getBalance", ACCOUNT1.to_string());
+        let pubkeys = RequestMethod::GetBalance.pubkeys(&string).unwrap();
+        assert!(matches!(pubkeys, Pubkeys::Single(ACCOUNT1)));
+    }
+
+    #[test]
+    fn parse_get_token_account_balance_meta() {
+        let string = jsonrpc!("getTokenAccountBalance", ACCOUNT1.to_string());
+        let pubkeys = RequestMethod::GetTokenAccountBalance
+            .pubkeys(&string)
+            .unwrap();
+        assert!(matches!(pubkeys, Pubkeys::Single(ACCOUNT1)));
+    }
+
+    #[test]
+    fn parse_get_multiple_accounts() {
+        let params = [ACCOUNT1.to_string(), ACCOUNT2.to_string()];
+        let string = jsonrpc!("getTokenAccountBalance", params);
+        let pubkeys = RequestMethod::GetMultipleAccounts.pubkeys(&string).unwrap();
+        assert!(matches!(pubkeys, Pubkeys::Multiple(_)));
+        let mut pubkeys = pubkeys.iter();
+        assert_eq!(pubkeys.next(), Some(&ACCOUNT1));
+        assert_eq!(pubkeys.next(), Some(&ACCOUNT2));
+    }
+
+    #[test]
+    fn parse_send_transaction() {
+        fn generation_transaction() -> (Transaction, Pubkey) {
+            let payer = Keypair::new();
+            let ix1 = transfer(&payer.pubkey(), &ACCOUNT1, 1);
+            let ix2 = transfer(&payer.pubkey(), &ACCOUNT2, 1);
+            let hash = Hash::new_unique();
+            let tx = Transaction::new_signed_with_payer(
+                &[ix1, ix2],
+                Some(&payer.pubkey()),
+                &[&payer],
+                hash,
+            );
+            (tx, payer.pubkey())
+        }
+
+        let (legacy, payer) = generation_transaction();
+        let versioned = VersionedTransaction::from(legacy.clone());
+        let encoders = [
+            |v: &[u8]| bs58::encode(v).into_string(),
+            |v: &[u8]| base64::encode(v),
+            |v: &[u8]| zstd::encode_all(v, 0).map(base64::encode).unwrap(),
+        ];
+        let encodings = ["base58", "base64", "base64+zstd"];
+        let txs = [
+            bincode::serialize(&legacy).unwrap(),
+            bincode::serialize(&versioned).unwrap(),
+        ];
+        for tx in txs {
+            for (encoder, encoding) in encoders.iter().zip(encodings) {
+                let tx = encoder(&tx);
+                let body = jsonrpc!("sendTransaction", tx, encoding);
+                let pubkeys = RequestMethod::SendTransaction.pubkeys(&body).unwrap();
+                assert!(matches!(pubkeys, Pubkeys::Multiple(_)));
+                let mut pubkeys = pubkeys.iter();
+                assert_eq!(pubkeys.next(), Some(&payer));
+                assert_eq!(pubkeys.next(), Some(&ACCOUNT1));
+                assert_eq!(pubkeys.next(), Some(&ACCOUNT2));
+            }
+        }
+    }
+}

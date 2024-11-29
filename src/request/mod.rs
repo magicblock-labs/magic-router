@@ -12,7 +12,7 @@ const METHOD_KEY: &str = "method";
 /// Partially parsed request from client
 pub struct Request {
     /// metadata related to request routing
-    meta: RequestMeta,
+    pubkeys: Pubkeys,
     /// full body of request
     payload: Bytes,
 }
@@ -23,23 +23,20 @@ impl Request {
         println!("REQUEST: {}", unsafe {
             std::str::from_utf8_unchecked(&payload)
         });
-        let meta = {
+        let pubkeys = {
             let method: LazyValue =
                 lazyvalue::get(&payload, &[METHOD_KEY]).map_err(|_| Error::InvalidRequest)?;
             let method = json::from_str::<RequestMethod>(method.as_raw_str())
                 .map_err(|_| Error::UnsupportedMethod)?;
-            method.meta(&payload)?
+            method.pubkeys(&payload)?
         };
-        Ok(Self { meta, payload })
+        Ok(Self { pubkeys, payload })
     }
-}
 
-/// Discriminator enum which indicates whether Transaction includes delegation instructions
-pub enum TransactionAction {
-    /// Transaction delegates some accounts
-    Delegates(Pubkeys),
-    /// Transaction doesn't use any instructions from Delegation Program
-    References(Pubkeys),
+    /// Returns all the pubkeys referensed in this request
+    pub fn pubkeys(&self) -> PubkeysIter {
+        self.pubkeys.iter()
+    }
 }
 
 /// Optimization type which avoids allocations when only one pubkey is used in request
@@ -88,44 +85,14 @@ impl<'a> Iterator for PubkeysIter<'a> {
     }
 }
 
-/// Metadata of request related to routing logic
-pub enum RequestMeta {
-    /// Request only reads data from block chain
-    ReadOnly(Pubkeys),
-    /// Request contains transaction which potentialy can delegate accounts
-    Transaction(TransactionAction),
-}
-
-impl RequestMeta {
-    /// Pubkeys referenced in request
-    pub fn pubkeys(&self) -> PubkeysIter<'_> {
-        match self {
-            RequestMeta::ReadOnly(pks) => pks.iter(),
-            RequestMeta::Transaction(txa) => match txa {
-                TransactionAction::Delegates(pks) => pks.iter(),
-                TransactionAction::References(pks) => pks.iter(),
-            },
-        }
-    }
-
-    /// whether request contains transaction with instruction from Delegation Program
-    /// returns optional iterator over all pubkeys to be used by Delegation Program
-    pub fn delegates(&self) -> Option<PubkeysIter<'_>> {
-        if let Self::Transaction(TransactionAction::Delegates(pubkeys)) = self {
-            Some(pubkeys.iter())
-        } else {
-            None
-        }
-    }
-}
-
 /// Allowed encodings for binary data used in request/responses
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum Encoding {
     /// Base58 encoding
+    #[serde(rename = "base58")]
     Base58,
     /// Base64 encoding
+    #[serde(rename = "base64")]
     Base64,
     /// Zstd compressed and then base64 encoded
     #[serde(rename = "base64+zstd")]

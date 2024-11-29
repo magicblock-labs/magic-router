@@ -5,7 +5,7 @@ use std::{convert::Infallible, future::Future};
 use http_body_util::BodyExt;
 use hyper::{body::Incoming, service::Service};
 
-use crate::{cache::AccountsCache, error::Error, http::client::HttpClient};
+use crate::{cache::AccountsCache, error::Error, http::HttpClient};
 
 use super::Request;
 
@@ -46,7 +46,7 @@ where
     handler: H,
 }
 
-macro_rules! terminate_on_error {
+macro_rules! map_error_to_response {
     ($result: expr) => {
         match $result {
             Ok(r) => r,
@@ -58,27 +58,19 @@ macro_rules! terminate_on_error {
 /// JSON-RPC HTTP request processor/router, parses request, looks up accounts referenced in request and
 /// routes it an appropriate upstream/destination
 pub async fn process(accessors: Accessors, req: Incoming) -> Result<Response, Infallible> {
-    let payload = terminate_on_error!(req.collect().await).to_bytes();
-    let request = terminate_on_error!(Request::new(payload));
+    let payload = map_error_to_response!(req.collect().await).to_bytes();
+    let request = map_error_to_response!(Request::new(payload));
     let client = 'client: {
-        if let Some(keys) = request.meta.delegates() {
-            for &key in keys {
-                accessors.cache.insert(key).await;
+        for pubkey in request.pubkeys() {
+            if accessors.cache.contains(pubkey).await {
+                tracing::info!("using ephem");
+                break 'client accessors.ephem;
             }
-            tracing::info!("using chain");
-            accessors.chain
-        } else {
-            for pubkey in request.meta.pubkeys() {
-                if accessors.cache.contains(pubkey).await {
-                    tracing::info!("using ephem");
-                    break 'client accessors.ephem;
-                }
-            }
-            tracing::info!("using chain");
-            accessors.chain
         }
+        tracing::info!("using chain");
+        accessors.chain
     };
-    Ok(terminate_on_error!(client
+    Ok(map_error_to_response!(client
         .fetch(request.payload)
         .await
         .map(Into::into)))

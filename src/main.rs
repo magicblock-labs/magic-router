@@ -17,7 +17,7 @@
 use cache::AccountsCache;
 use config::Configuration;
 use error::InternalError;
-use http::client::HttpClient;
+use http::HttpClient;
 use request::handler::Accessors;
 use server::Server;
 use solana::pubkey::Pubkey;

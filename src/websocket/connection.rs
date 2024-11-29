@@ -20,7 +20,7 @@ use crate::{
     account::GetAccountInfoResponse,
     config::WebsocketConf,
     error::{Error, InternalError},
-    http::client::HttpClient,
+    http::HttpClient,
     websocket::message::{Notification, WebsocketMessage},
 };
 
