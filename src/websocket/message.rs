@@ -89,8 +89,8 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use solana::pubkey::Pubkey;
     use json::from_slice;
+    use solana::pubkey::Pubkey;
 
     const ACCOUNT_NOTIFICATION: &[u8] = br#"{
             "jsonrpc": "2.0",
