@@ -12,8 +12,8 @@ use std::{
     },
 };
 
+use solana::pubkey::Pubkey;
 use flume::Sender;
-use crate::solana::Pubkey;
 use tokio::{sync::mpsc::Sender as TokioSender, task::JoinHandle};
 
 use crate::{config::WebsocketConf, http::client::HttpClient};

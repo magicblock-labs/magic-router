@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::solana::Pubkey;
+use solana::pubkey::Pubkey;
 use flume::Receiver;
 use futures::{SinkExt, StreamExt};
 use tokio::{net::TcpStream, sync::mpsc::Sender, time::Interval};

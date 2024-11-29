@@ -1,6 +1,6 @@
 //! module for working with requests received from client
 
-use crate::solana::Pubkey;
+use solana::pubkey::Pubkey;
 use bytes::Bytes;
 use json::{lazyvalue, Deserialize, LazyValue};
 use method::RequestMethod;

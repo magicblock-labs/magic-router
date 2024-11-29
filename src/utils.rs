@@ -2,7 +2,7 @@
 
 use std::{fmt, str::FromStr, time::Duration};
 
-use crate::solana::Pubkey;
+use solana::pubkey::Pubkey;
 use json::Deserialize;
 use serde::{
     de::{Error, Visitor},

@@ -2,10 +2,10 @@
 
 use std::str::FromStr;
 
-use crate::solana::Pubkey;
 use bytes::Bytes;
 use json::{lazyvalue, Deserialize, JsonValueTrait};
-use solana_sdk::transaction::{Transaction, VersionedTransaction};
+use solana::pubkey::Pubkey;
+use solana::transaction::{Transaction, VersionedTransaction};
 
 use crate::{error::Error, request::Encoding, DELEGATION_PROGRAM_ID};
 
@@ -127,7 +127,7 @@ impl RequestMethod {
                 // those, collect all writable accounts if found
                 for pubkey in accounts {
                     if *pubkey == DELEGATION_PROGRAM_ID {
-                        for i in 0..accounts.len() {
+                        for (i, _) in accounts.iter().enumerate() {
                             if tx.message.is_maybe_writable(i, None) {
                                 match &mut delegatable {
                                     None => {
