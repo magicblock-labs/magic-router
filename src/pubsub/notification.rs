@@ -1,5 +1,9 @@
-use json::{JsonValueTrait, Value};
+use std::sync::Arc;
+
+use json::JsonValueTrait;
 use serde::Deserialize;
+use solana_account::Account;
+use solana_account_decoder::UiAccount;
 
 use crate::types::{RequestId, SubscriptionId};
 
@@ -13,6 +17,21 @@ pub enum WebsocketMessage {
     Unsubscribed(UnsubscriptionResult),
     /// A notification message.
     Notification(Notification),
+}
+
+/// Internal message sent by WebSocket connection handler to all of its subscribers
+/// (entities listening for notifications)
+pub enum PubsubMessage {
+    /// Successful subscription to given request
+    Subscribed(RequestId),
+    /// WebSocket notification received by connection
+    Notification {
+        id: RequestId,
+        payload: Arc<json::Value>,
+    },
+    /// A notification indicating that connection is down, and all subscribers
+    /// should choose another connection to revive the given subscription
+    Disconnected(RequestId),
 }
 
 impl WebsocketMessage {
@@ -41,7 +60,7 @@ pub struct Notification {
 #[derive(Deserialize, Debug)]
 pub struct NotificationParams {
     /// Result of notification
-    pub result: Value,
+    pub result: json::Value,
     /// Subscription ID
     pub subscription: SubscriptionId,
 }
@@ -60,4 +79,25 @@ pub struct SubscriptionResult {
 pub struct UnsubscriptionResult {
     /// ID of unsubscription request
     pub id: RequestId,
+}
+
+#[inline(always)]
+pub fn deserialize_account(payload: &json::Value, path: &[&str]) -> Option<Account> {
+    deserialize_field::<UiAccount>(payload, path)
+        .as_ref()
+        .and_then(UiAccount::decode::<Account>)
+}
+
+#[inline(always)]
+pub fn deserialize_field<'a, F: Deserialize<'a>>(
+    payload: &'a json::Value,
+    path: &[&str],
+) -> Option<F> {
+    let mut value = payload;
+
+    for p in path {
+        value = value.get(p)?;
+    }
+
+    json::from_value::<F>(value).ok()
 }

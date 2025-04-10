@@ -35,10 +35,14 @@ solana-rpc-client-api = { version = "2.2" }
 solana-rpc-client = { version = "2.2" }
 solana-commitment-config = { version = "2.2" }
 
+# programs 
+mdp = { package = "magic-domain-program", git = "https://github.com/magicblock-labs/magic-domain-program.git", rev = "eba7644" } 
+
+# sync
+flume = "0.11"
+
 # networking
-soketto = "0.8"
 url = "2.5"
-tokio-rustls = "0.26" 
 
 # containers 
 scc = "2.2"
@@ -47,7 +51,11 @@ scc = "2.2"
 toml = "0.8"
 serde = { version = "1.0", features = [ "derive" ] }
 json = { package = "sonic-rs", version = "0.3" } 
+borsh = "1.5"
 
 # logging
 tracing = "0.1"
+
+# misc
+thiserror = "2.0"
 
