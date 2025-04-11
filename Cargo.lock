@@ -1834,6 +1834,7 @@ name = "magic-router"
 version = "0.0.1"
 dependencies = [
  "borsh 1.5.7",
+ "bs58",
  "flume",
  "futures",
  "jsonrpsee",

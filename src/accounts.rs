@@ -4,8 +4,8 @@ use solana_pubkey::Pubkey;
 use url::Url;
 
 use crate::types::RequestId;
-pub const DELEGATION_PROGRAM: Pubkey =
-    Pubkey::from_str_const("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
+pub const DELEGATION_PROGRAM_STR: &str = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
+pub const DELEGATION_PROGRAM: Pubkey = Pubkey::from_str_const(DELEGATION_PROGRAM_STR);
 /// Serialized size of delegation record PDA
 /// NOTE: this is taken from the delegation program
 pub const DELEGATION_RECORD_DATA_SIZE: usize = 88;
@@ -24,7 +24,7 @@ pub enum DelegationStatus {
 
 impl DelegationStatus {
     #[inline(always)]
-    fn is_delegated(&self) -> bool {
+    pub fn is_delegated(&self) -> bool {
         matches!(self, Self::Delegated(_))
     }
 }

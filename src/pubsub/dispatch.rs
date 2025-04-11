@@ -71,6 +71,7 @@ impl SubscriptionDispatcher {
                     };
                     if let Err(SendError(r)) = tx.send(request) {
                         tracing::warn!(url=%r.destination(), "all connections to the upstream have been terminated");
+                        self.upstreams.remove(r.destination());
                     }
                 }
                 else => {

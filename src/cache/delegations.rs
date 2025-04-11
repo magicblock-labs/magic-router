@@ -35,15 +35,18 @@ pub struct DelegationsCache {
 
 impl DelegationsCache {
     pub fn new(dispatcher_tx: Sender<SubscriptionAction>, routes: Arc<RoutingTable>) -> Self {
-        let (pubsub_tx, mut pubsub_rx) = mpsc::channel(1024);
-        Self {
+        let (pubsub_tx, pubsub_rx) = mpsc::channel(1024);
+        let this = Self {
             db: Default::default(),
             subscriber_id: SubscriberId::generate(),
             dispatcher_tx,
             pubsub_tx,
             routes,
             subscriptions: Default::default(),
-        }
+        };
+        let updater = this.updater(pubsub_rx);
+        tokio::spawn(updater);
+        this
     }
 
     pub async fn get_delegation_status(&self, pubkey: Pubkey) -> DelegationStatus {

@@ -5,7 +5,7 @@ use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcProgramAccountsConf
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
-use crate::types::{RequestId, SubscriberId};
+use crate::types::{RequestId, SerdePubkey, SubscriberId};
 
 use super::notification::PubsubMessage;
 
@@ -22,6 +22,23 @@ pub struct Subscription {
     pub payload: json::Value,
     pub tx: Sender<PubsubMessage>,
     pub destination: Arc<Url>,
+}
+
+impl Subscription {
+    pub fn clone_with_destination(&self, url: Arc<Url>) -> Self {
+        let mut clone = self.clone();
+        clone.destination = url;
+        clone
+    }
+
+    pub fn to_unsubsciption(&self, method: &'static str) -> SubscriptionAction {
+        SubscriptionAction::Unsubscribe(Unsubscription {
+            subscriber_id: self.subscriber_id,
+            request_id: self.request_id,
+            destination: self.destination.clone(),
+            method,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -52,7 +69,7 @@ pub fn account_subscription_json(
         "id": id,
         "method": "accountSubscribe",
         "params": [
-            pubkey,
+            SerdePubkey(pubkey),
             params
         ]
     })
@@ -69,7 +86,7 @@ pub fn program_subscription_json(
         "id": id,
         "method": "programSubscribe",
         "params": [
-            pubkey,
+            SerdePubkey(pubkey),
             params
         ]
     })
