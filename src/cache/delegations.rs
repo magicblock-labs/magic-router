@@ -34,10 +34,15 @@ pub struct DelegationsCache {
 }
 
 impl DelegationsCache {
-    pub fn new(dispatcher_tx: Sender<SubscriptionAction>, routes: Arc<RoutingTable>) -> Self {
+    pub fn new(
+        dispatcher_tx: Sender<SubscriptionAction>,
+        routes: Arc<RoutingTable>,
+        max_cached_delegations: usize,
+    ) -> Self {
         let (pubsub_tx, pubsub_rx) = mpsc::channel(1024);
+        let min_capacity = 1024.min(max_cached_delegations);
         let this = Self {
-            db: Default::default(),
+            db: HashCache::with_capacity(min_capacity, max_cached_delegations).into(),
             subscriber_id: SubscriberId::generate(),
             dispatcher_tx,
             pubsub_tx,

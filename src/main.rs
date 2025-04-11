@@ -2,7 +2,8 @@ use error::RouterError;
 
 type RouterResult<T> = Result<T, RouterError>;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     println!("Hello, world!");
 }
 

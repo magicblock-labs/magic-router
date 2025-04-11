@@ -42,7 +42,7 @@ mdp = { package = "magic-domain-program", git = "https://github.com/magicblock-l
 flume = "0.11"
 
 # networking
-url = "2.5"
+url = { version = "2.5", features = ["serde"] }
 
 # containers 
 scc = "2.2"
