@@ -6,7 +6,6 @@ use serde::de::{self, Visitor};
 use serde::{Deserializer, Serializer};
 use solana_pubkey::Pubkey;
 
-pub type Slot = u64;
 pub type SubscriptionId = u64;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -60,7 +59,7 @@ impl<'de> Deserialize<'de> for SerdePubkey {
     {
         struct SerdePubkeyVisitor;
 
-        impl<'de> Visitor<'de> for SerdePubkeyVisitor {
+        impl Visitor<'_> for SerdePubkeyVisitor {
             type Value = SerdePubkey;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

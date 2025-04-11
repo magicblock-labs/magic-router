@@ -25,8 +25,8 @@ use crate::{
 };
 
 pub struct HttpServer {
-    delegations: Arc<DelegationsCache>,
-    routes: Arc<RoutingTable>,
+    pub delegations: Arc<DelegationsCache>,
+    pub routes: Arc<RoutingTable>,
 }
 
 #[async_trait]

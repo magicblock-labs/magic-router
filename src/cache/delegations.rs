@@ -38,7 +38,7 @@ impl DelegationsCache {
         dispatcher_tx: Sender<SubscriptionAction>,
         routes: Arc<RoutingTable>,
         max_cached_delegations: usize,
-    ) -> Self {
+    ) -> Arc<Self> {
         let (pubsub_tx, pubsub_rx) = mpsc::channel(1024);
         let min_capacity = 1024.min(max_cached_delegations);
         let this = Self {
@@ -51,7 +51,7 @@ impl DelegationsCache {
         };
         let updater = this.updater(pubsub_rx);
         tokio::spawn(updater);
-        this
+        Arc::new(this)
     }
 
     pub async fn get_delegation_status(&self, pubkey: Pubkey) -> DelegationStatus {

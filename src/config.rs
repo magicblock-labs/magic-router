@@ -1,17 +1,22 @@
+use std::net::SocketAddr;
+
 use serde::Deserialize;
 use url::Url;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct RouterConfig {
-    base_chain_urls: Vec<Url>,
-    max_cached_delegations: usize,
-    websocket: WebsocketConnectionConfig,
+    pub listen_address: SocketAddr,
+    pub base_chain_urls: Vec<Url>,
+    pub max_cached_delegations: usize,
+    pub max_connections: u32,
+    pub max_subscriptions_per_connection: u32,
+    pub websocket: WebsocketConnectionConfig,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
-struct WebsocketConnectionConfig {
-    ping_interval_sec: u64,
-    connections_per_upstream: u16,
+pub struct WebsocketConnectionConfig {
+    pub ping_interval_sec: u64,
+    pub connections_per_upstream: u16,
 }

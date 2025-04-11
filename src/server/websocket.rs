@@ -24,9 +24,9 @@ use crate::{
 const UPSTREAM_SUB_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct WebsocketServer {
-    delegations: Arc<DelegationsCache>,
-    routes: Arc<RoutingTable>,
-    dispatcher_tx: Sender<SubscriptionAction>,
+    pub delegations: Arc<DelegationsCache>,
+    pub routes: Arc<RoutingTable>,
+    pub dispatcher_tx: Sender<SubscriptionAction>,
 }
 
 #[async_trait]
@@ -85,7 +85,6 @@ impl WebsocketRpcServer for WebsocketServer {
             sink,
             subscriber_id,
             pubsub_rx,
-            pubsub_tx,
             chain_subscription,
             ephem_subscription,
             dispatcher_tx: self.dispatcher_tx.clone(),
@@ -104,7 +103,6 @@ struct SubscriptionHandler {
     pubsub_rx: Receiver<PubsubMessage>,
     routes: Arc<RoutingTable>,
     delegations: Arc<DelegationsCache>,
-    pubsub_tx: Sender<PubsubMessage>,
     dispatcher_tx: Sender<SubscriptionAction>,
     chain_subscription: Subscription,
     ephem_subscription: Option<Subscription>,
