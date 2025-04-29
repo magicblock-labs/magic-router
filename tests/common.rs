@@ -50,7 +50,7 @@ impl TestEnv {
             .expect("failed to start router");
         handles.push(handle);
         // wait for the servers to finish init
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        sleep().await;
         Self {
             chain,
             router_client,
@@ -66,7 +66,6 @@ impl TestEnv {
         self.handles.push(handle);
         self.er_nodes.insert(er_node, ephemeral);
         self.chain.add_route(er_node, port).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     pub fn add_account(&self, pubkey: Pubkey, owner: Pubkey) {
@@ -80,6 +79,21 @@ impl TestEnv {
             return;
         };
         node.add_account(pubkey, owner);
+        sleep().await;
+    }
+
+    pub async fn undelegate_account(&mut self, pubkey: Pubkey) {
+        let Some(er_node) = self.delegations.remove(&pubkey) else {
+            return;
+        };
+        let Some(server) = self.er_nodes.get(&er_node) else {
+            return;
+        };
+        let Some(original_owner) = server.account_owner(&pubkey) else {
+            return;
+        };
+        self.chain.undelegate_account(pubkey, original_owner).await;
+        sleep().await;
     }
 
     pub async fn update_account_balance(&self, pubkey: Pubkey, lamports: u64, on_chain: bool) {
@@ -111,6 +125,10 @@ impl Drop for TestEnv {
             let _ = h.stop();
         }
     }
+}
+
+pub async fn sleep() {
+    tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
 fn host<T>(port: u16, with_schema: bool) -> T

@@ -110,7 +110,7 @@ impl DelegationsCache {
             request_id,
             destination,
         };
-        let result = self.dispatcher_tx.send(subscription).await;
+        let _ = self.dispatcher_tx.send(subscription).await;
 
         let _ = self.subscriptions.insert(request_id, pubkey);
         match self.db.entry(pubkey) {

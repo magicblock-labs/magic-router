@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use jsonrpsee::core::{async_trait, RpcResult};
 use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
@@ -101,7 +101,23 @@ impl RoHttpRpcServer for HttpServer {
                 let accounts = pubkeys.into_iter().zip(response.value);
                 slot.fetch_max(response.context.slot, Ordering::Relaxed);
                 Ok::<_, RouterError>(accounts)
-            };
+            }
+            .boxed();
+            requests.push(req);
+        }
+        if !undelegated_pubkeys.is_empty() {
+            let client = self.routes.base_chain().client.clone();
+            let slot = &slot;
+            let req = async move {
+                let pks: Vec<_> = undelegated_pubkeys.iter().map(|(_, pk)| *pk).collect();
+                let response = client
+                    .get_multiple_accounts_with_config(&pks, config)
+                    .await?;
+                let accounts = undelegated_pubkeys.into_iter().zip(response.value);
+                slot.fetch_max(response.context.slot, Ordering::Relaxed);
+                Ok::<_, RouterError>(accounts)
+            }
+            .boxed();
             requests.push(req);
         }
         while let Some(accounts) = requests.next().await {

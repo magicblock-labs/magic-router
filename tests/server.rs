@@ -142,7 +142,6 @@ impl MockServer {
             if sink.get().send(msg).await.is_err() {
                 self.program_subscriptions.remove(&owner);
             }
-            println!("route update sent is sent: {identity}");
         }
         let _ = self.accounts.insert(pda, account);
     }
@@ -177,6 +176,10 @@ impl MockServer {
         let pda = delegation_record_pda(acc);
         self.accounts.remove(&pda);
         self.notify_account(&pda, &Account::default()).await;
+    }
+
+    pub fn account_owner(&self, acc: &Pubkey) -> Option<Pubkey> {
+        self.accounts.get(acc).map(|a| a.owner)
     }
 
     fn response<T>(&self, value: T) -> Response<T> {
