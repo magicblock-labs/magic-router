@@ -7,7 +7,7 @@ use solana_rpc_client_api::{
 
 use crate::types::SerdePubkey;
 
-#[rpc(server, namespace = "get")]
+#[rpc(server)]
 pub trait RoHttpRpc {
     #[method(name = "getAccountInfo")]
     async fn account_info(

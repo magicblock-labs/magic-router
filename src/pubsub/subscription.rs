@@ -9,13 +9,13 @@ use crate::types::{RequestId, SerdePubkey, SubscriberId};
 
 use super::notification::PubsubMessage;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SubscriptionAction {
     Subscribe(Subscription),
     Unsubscribe(Unsubscription),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Subscription {
     pub request_id: RequestId,
     pub subscriber_id: SubscriberId,
@@ -41,7 +41,7 @@ impl Subscription {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Unsubscription {
     pub subscriber_id: SubscriberId,
     pub request_id: RequestId,

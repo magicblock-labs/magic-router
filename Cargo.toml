@@ -56,6 +56,8 @@ bs58 = "0.5"
 
 # logging
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
 
 # misc
 thiserror = "2.0"

@@ -60,7 +60,7 @@ impl SubscriptionDispatcher {
                     if self.upstreams.contains_key(&state.url) {
                         continue;
                     }
-                    if let Err(error) = self.try_spawn_connections(state.url).await {
+                    if let Err(error) = self.try_spawn_connections(state.url.clone()).await {
                         tracing::error!(%error, "failed to init new ws connection to upstream");
                     }
                 }

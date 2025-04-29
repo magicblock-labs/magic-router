@@ -169,7 +169,8 @@ impl SubscriptionHandler {
                             tracing::debug!(id=id.0, "subscription has been confirmed");
                         }
                         PubsubMessage::Notification { payload, id } => {
-                            let Some(result) = payload.get("params").and_then(|p| p.get("result")) else {
+                            let params = payload.get("params");
+                            let Some(result) = params.and_then(|p| p.get("result")) else {
                                 tracing::warn!(
                                     id=id.0,
                                     ?payload,
@@ -178,10 +179,13 @@ impl SubscriptionHandler {
                                 continue;
                             };
                             self.handle_delegation_status_change(result, id).await;
+                            let Some(params) = params else {
+                                continue
+                            };
                             let Ok(msg) = SubscriptionMessage::new(
                                 "accountNotification",
                                 self.sink.subscription_id(),
-                                result
+                                params
                             ) else {
                                 tracing::warn!("failed to serialize json value, should never happen");
                                 continue;

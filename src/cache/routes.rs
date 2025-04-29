@@ -124,6 +124,10 @@ impl RoutingTable {
                 url: upstream.ws_url.clone(),
             })
             .await;
+        println!(
+            "route update is inserted for {identity} -> {}",
+            upstream.client.url()
+        );
         let _ = self.inner.insert(identity, upstream);
     }
 
@@ -165,21 +169,22 @@ impl RoutingTable {
                     tracing::info!(id = id.0, "subscribed to MDP program accounts");
                 }
                 PubsubMessage::Notification { ref payload, .. } => {
-                    let Some(pubkey) = deserialize_field::<&str>(
-                        payload,
-                        &["params", "result", "value", "pubkey"],
-                    )
-                    .and_then(|s| Pubkey::from_str(s).ok()) else {
-                        tracing::warn!(?payload, "encounterd invalid websocket notification");
-                        continue;
-                    };
-
-                    let Some(account) =
-                        deserialize_account(payload, &["params", "result", "value", "account"])
+                    println!("received route update: {payload}");
+                    let Some(pubkey) = deserialize_field::<&str>(payload, &["value", "pubkey"])
+                        .and_then(|s| Pubkey::from_str(s).ok())
                     else {
                         tracing::warn!(?payload, "encounterd invalid websocket notification");
+                        println!("couldn't extract pubkey from {payload}");
                         continue;
                     };
+                    println!("deserialized pubkey: {pubkey}");
+
+                    let Some(account) = deserialize_account(payload, &["value", "account"]) else {
+                        tracing::warn!(?payload, "encounterd invalid websocket notification");
+                        println!("encounterd invalid websocket notification: {payload}");
+                        continue;
+                    };
+                    println!("deserialized account for: {pubkey}");
 
                     self.insert_entry(pubkey, account).await;
                 }

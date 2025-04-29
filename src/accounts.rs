@@ -8,7 +8,7 @@ pub const DELEGATION_PROGRAM_STR: &str = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMAR
 pub const DELEGATION_PROGRAM: Pubkey = Pubkey::from_str_const(DELEGATION_PROGRAM_STR);
 /// Serialized size of delegation record PDA
 /// NOTE: this is taken from the delegation program
-pub const DELEGATION_RECORD_DATA_SIZE: usize = 88;
+pub const DELEGATION_RECORD_DATA_SIZE: usize = 96;
 
 pub struct DelegationEntry {
     pub request_id: RequestId,
@@ -16,7 +16,7 @@ pub struct DelegationEntry {
     pub status: DelegationStatus,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum DelegationStatus {
     Delegated(Pubkey),
     NotDelegated,

@@ -35,6 +35,7 @@ pub trait UniqueId: Sized + From<u64> {
 impl_unique_id!(RequestId);
 impl_unique_id!(SubscriberId);
 
+#[derive(Clone)]
 pub struct SerdePubkey(pub Pubkey);
 
 impl Serialize for SerdePubkey {
@@ -43,12 +44,12 @@ impl Serialize for SerdePubkey {
         S: Serializer,
     {
         let mut buf = [0u8; 44]; // 32 bytes will expand to at most 44 base58 characters
-        bs58::encode(&self.0)
+        let size = bs58::encode(&self.0)
             .onto(buf.as_mut_slice())
             .expect("Buffer too small");
         // SAFETY:
         // bs58 always produces valid UTF-8
-        serializer.serialize_str(unsafe { std::str::from_utf8_unchecked(&buf) })
+        serializer.serialize_str(unsafe { std::str::from_utf8_unchecked(&buf[..size]) })
     }
 }
 

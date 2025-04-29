@@ -1,0 +1,32 @@
+# Router configuration
+
+# The IP address and port where the router will listen for incoming connections.
+# Example: "127.0.0.1:8080"
+listen-address = "127.0.0.1:8080"
+
+# A list of base URLs for chain nodes that the router can connect to. 
+# Round robin load balancing strategy will be employed between provided upstreams
+base-chain-urls = ["https://api.devnet.solana.com"]
+
+# The maximum number of delegation caches that the router will hold.
+# Example: 1000
+max-cached-delegations = 1000
+
+# The maximum number of simultaneous connections that the router can handle.
+# Example: 500
+max-connections = 1024
+
+# The maximum number of subscriptions allowed per connection.
+# Example: 10
+max-subscriptions-per-connection = 1024
+
+# WebSocket connection configuration
+[websocket]
+
+# The interval in seconds for sending ping messages to maintain WebSocket connections.
+# Example: 30
+ping-interval-sec = 30
+
+# The number of connections allowed per upstream WebSocket server.
+# Example: 5
+connections-per-upstream = 5

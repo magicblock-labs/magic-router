@@ -55,10 +55,10 @@ impl DelegationsCache {
     }
 
     pub async fn get_delegation_status(&self, pubkey: Pubkey) -> DelegationStatus {
-        if let Some(entry) = self.db.get(&pubkey) {
+        let pda = delegation_record_pda(pubkey);
+        if let Some(entry) = self.db.get(&pda) {
             return entry.get().status;
         }
-        let pda = delegation_record_pda(pubkey);
         let mut attempt = 0;
         let chain = &self.routes.base_chain().client;
         loop {
@@ -69,7 +69,7 @@ impl DelegationsCache {
                 Ok(Response { value: Some(a), .. }) => a,
                 Ok(Response { value: None, .. }) => {
                     let status = DelegationStatus::NotDelegated;
-                    self.insert(pubkey, status).await;
+                    self.insert(pda, status).await;
                     return status;
                 }
                 Err(error) => {
@@ -88,7 +88,7 @@ impl DelegationsCache {
             };
             let status = DelegationStatus::Delegated(identity);
 
-            self.insert(pubkey, status).await;
+            self.insert(pda, status).await;
 
             break status;
         }
@@ -110,7 +110,8 @@ impl DelegationsCache {
             request_id,
             destination,
         };
-        let _ = self.dispatcher_tx.send(subscription).await;
+        let result = self.dispatcher_tx.send(subscription).await;
+
         let _ = self.subscriptions.insert(request_id, pubkey);
         match self.db.entry(pubkey) {
             Entry::Vacant(e) => {
@@ -144,7 +145,7 @@ impl DelegationsCache {
                         );
                     }
                     PubsubMessage::Notification { id, payload } => {
-                        let account = deserialize_account(&payload, &["params", "result", "value"]);
+                        let account = deserialize_account(&payload, &["value"]);
 
                         let Some(account) = account else {
                             tracing::warn!(
@@ -190,14 +191,14 @@ impl DelegationsCache {
 }
 
 /// One to one PDA derivation logic for delegation record pubkey
-fn delegation_record_pda(pubkey: Pubkey) -> Pubkey {
+pub fn delegation_record_pda(pubkey: Pubkey) -> Pubkey {
     let seeds: &[&[u8]] = &[b"delegation", pubkey.as_ref()];
     Pubkey::find_program_address(seeds, &DELEGATION_PROGRAM).0
 }
 
 fn extract_delegation_identity(data: &[u8]) -> Option<Pubkey> {
     let size = data.len();
-    if size == DELEGATION_RECORD_DATA_SIZE {
+    if size != DELEGATION_RECORD_DATA_SIZE {
         tracing::error!(%size, "unexpected delegation record size");
         return None;
     }
