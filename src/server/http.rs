@@ -24,8 +24,11 @@ use crate::{
     types::SerdePubkey,
 };
 
+/// Http server implementation for handling solana JSON-RPC requests
 pub struct HttpServer {
+    /// Database of delegation states of accounts
     pub delegations: Arc<DelegationsCache>,
+    /// Database of routes to upstream ER nodes or base layer chain
     pub routes: Arc<RoutingTable>,
 }
 

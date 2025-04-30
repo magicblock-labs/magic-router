@@ -25,11 +25,17 @@ use crate::{
     RouterResult,
 };
 
+/// Routes manager, keeps an up to date mapping between ER identities and their FQDNs
 pub struct RoutingTable {
+    /// List of ER nodes and their connection handles
     inner: HashMap<Pubkey, UpstreamRecord>,
+    /// Mapping between magic domain program PDA and ER identity
     pda_to_identity: HashMap<Pubkey, Pubkey>,
+    /// List of connection handles to base layer chain endpoints
     base_chain: BaseChainUpstreams,
+    /// Channel endpoint to websocket subscriptions dispatcher
     dispatcher_tx: Sender<SubscriptionAction>,
+    /// Channel endpoint to send websocket updates on routes back to routes manager
     upstream_state_tx: Sender<WsUpstreamState>,
 }
 

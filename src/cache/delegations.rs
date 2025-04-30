@@ -22,14 +22,22 @@ use crate::{
 use super::routes::RoutingTable;
 
 const MAX_ACCOUNT_REFETCH_ATTEMPTS: u64 = 3;
+/// We use HashCache to keep the number of entries bounded
 type DelegationsDB = Arc<HashCache<Pubkey, DelegationEntry>>;
 
+/// In memory store for delegation statuses of all encountered accounts
 pub struct DelegationsCache {
     subscriber_id: SubscriberId,
+    /// Channel endpoint for the wesocket connection to
+    /// send notification to delegations cache manager
     pubsub_tx: Sender<PubsubMessage>,
+    /// Cache of delegation states
     db: DelegationsDB,
+    /// Channel endpoint to wesocket subscriptions dispatcher
     dispatcher_tx: Sender<SubscriptionAction>,
+    /// Routes manager, mapping ER identity to FQDNs
     routes: Arc<RoutingTable>,
+    /// List of active subscriptions to delegation states of given accounts
     subscriptions: Arc<HashMap<RequestId, Pubkey>>,
 }
 

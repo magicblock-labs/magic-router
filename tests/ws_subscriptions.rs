@@ -53,4 +53,22 @@ async fn test_account_subscribe() {
         response.value.lamports, 43,
         "account update should include latest balance change"
     );
+    env.undelegate_account(pubkey).await;
+    let response = sub
+        .next()
+        .await
+        .expect("websocket stream shouldn't be closed");
+    assert_eq!(
+        response.value.lamports, 43,
+        "account update from chain should include latest state from ER"
+    );
+    env.update_account_balance(pubkey, 44, false).await;
+    let response = sub
+        .next()
+        .await
+        .expect("websocket stream shouldn't be closed");
+    assert_eq!(
+        response.value.lamports, 44,
+        "account update from chain should contain latest update"
+    );
 }

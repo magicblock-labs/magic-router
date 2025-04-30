@@ -23,9 +23,13 @@ use crate::{
 
 const UPSTREAM_SUB_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Websocket server for handling solana JSON-RPC websocket subscriptions
 pub struct WebsocketServer {
+    /// Database of delegation states of accounts
     pub delegations: Arc<DelegationsCache>,
+    /// Database of routes to upstream ER nodes or base layer chain
     pub routes: Arc<RoutingTable>,
+    /// Channel endpoint to websocket subscriptions dispatcher
     pub dispatcher_tx: Sender<SubscriptionAction>,
 }
 

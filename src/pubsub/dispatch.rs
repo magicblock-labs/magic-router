@@ -11,10 +11,17 @@ use super::subscription::SubscriptionAction;
 /// A websocket subscription routing hub. It manages all of the upstream connections
 /// and properly directs subscription requests to provided URLs
 pub struct SubscriptionDispatcher {
+    /// Channel endpoint to receive any updates on websocket
+    /// upstreams, like url change or going offline
     upstream_state_rx: Receiver<WsUpstreamState>,
+    /// Channel endpoint for subscription/unsubscription requests
     requests_rx: Receiver<SubscriptionAction>,
+    /// A map between upstreams (identified by their URL) and
+    /// channel for communicating with them
     upstreams: HashMap<Arc<Url>, Sender<SubscriptionAction>>,
+    /// Number of websocket connections to spawn for each websocket upstream
     connections_per_upstream: u16,
+    /// Connection ID counter
     connection_id: u32,
 }
 

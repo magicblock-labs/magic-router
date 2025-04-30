@@ -21,13 +21,22 @@ type SubscriptionsDB = HashMap<SubscriptionId, HashMap<SubscriberId, SubscriberH
 
 /// Single websocket connection handler
 pub struct WebsocketConnection {
+    /// Connection id, used for logging
     id: u32,
+    /// Write endpoint for underlying websocket stream
     sender: Sender<Compat<EitherStream>>,
+    /// Read endpoint for underlying websocket stream
     receiver: Receiver<Compat<EitherStream>>,
+    /// All active subscriptions on this websocket connection
     subscriptions: SubscriptionsDB,
+    /// Subscriptions which haven't yet been confirmed and assinged an ID
     inflights: HashMap<RequestId, Subscription>,
+    /// Mapping between internal request id (used by various actor components) and subscription
+    /// id assigned by the upstream. This map is used for unsubscribe requests
     request_to_subs: HashMap<RequestId, SubscriptionId>,
+    /// Channel endpoint for subscription/unsubscription requests
     requests_rx: StealingReceiver<SubscriptionAction>,
+    /// Url of this websocket connection
     url: Arc<Url>,
 }
 

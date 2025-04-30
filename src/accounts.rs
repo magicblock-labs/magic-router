@@ -10,9 +10,14 @@ pub const DELEGATION_PROGRAM: Pubkey = Pubkey::from_str_const(DELEGATION_PROGRAM
 /// NOTE: this is taken from the delegation program
 pub const DELEGATION_RECORD_DATA_SIZE: usize = 96;
 
+/// Delegation metadata for account
 pub struct DelegationEntry {
+    /// Unique request ID associated with websocket subscription,
+    /// which keeps track of any delegation status change
     pub request_id: RequestId,
+    /// FQDN of the upstream where subscription request has been sent
     pub destination: Arc<Url>,
+    /// Delegation status of the account
     pub status: DelegationStatus,
 }
 
