@@ -62,3 +62,5 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 # misc
 thiserror = "2.0"
 
+[dev-dependencies]
+solana-pubsub-client = { version = "2.2" }

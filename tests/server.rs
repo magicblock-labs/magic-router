@@ -72,6 +72,10 @@ impl MockServer {
             .insert(pubkey, Account::new(23242400, 165, &owner));
     }
 
+    pub fn add_existing_account(&self, pubkey: Pubkey, account: Account) {
+        let _ = self.accounts.insert(pubkey, account);
+    }
+
     pub async fn update_account_balance(&self, pubkey: &Pubkey, lamports: u64) {
         let Some(mut account) = self.accounts.get(pubkey) else {
             return;
@@ -146,12 +150,7 @@ impl MockServer {
         let _ = self.accounts.insert(pda, account);
     }
 
-    pub async fn delegate_account(&self, acc: Pubkey, er_node: Pubkey) -> Pubkey {
-        let mut account = self.accounts.get(&acc).expect("account doesn't exist");
-        let original_owner = account.owner;
-        account.set_owner(DELEGATION_PROGRAM);
-        self.notify_account(&acc, account.get()).await;
-
+    pub async fn delegate_account(&self, acc: Pubkey, er_node: Pubkey) -> Account {
         let pda = delegation_record_pda(acc);
         let mut data = vec![0; DELEGATION_RECORD_DATA_SIZE];
         data[8..40].copy_from_slice(er_node.as_ref());
@@ -163,23 +162,28 @@ impl MockServer {
             rent_epoch: u64::MAX,
         };
         self.notify_account(&pda, &delegation_record).await;
-        drop(account);
         let _ = self.accounts.insert(pda, delegation_record);
-        original_owner
+
+        let mut account = self.accounts.get(&acc).expect("account doesn't exist");
+        let original_account = account.clone();
+        account.set_owner(DELEGATION_PROGRAM);
+        self.notify_account(&acc, account.get()).await;
+
+        original_account
     }
 
-    pub async fn undelegate_account(&self, acc: Pubkey, owner: Pubkey) {
-        if let Some(mut account) = self.accounts.get(&acc) {
-            account.set_owner(owner);
-            self.notify_account(&acc, account.get()).await;
-        }
-        let pda = delegation_record_pda(acc);
+    pub async fn undelegate_account(&self, pubkey: Pubkey, acc: Account) {
+        let pda = delegation_record_pda(pubkey);
         self.accounts.remove(&pda);
         self.notify_account(&pda, &Account::default()).await;
+        if let Some(mut account) = self.accounts.get(&pubkey) {
+            *account = acc;
+            self.notify_account(&pubkey, account.get()).await;
+        }
     }
 
-    pub fn account_owner(&self, acc: &Pubkey) -> Option<Pubkey> {
-        self.accounts.get(acc).map(|a| a.owner)
+    pub fn account(&self, acc: &Pubkey) -> Option<Account> {
+        self.accounts.get(acc).map(|a| a.get().clone())
     }
 
     fn response<T>(&self, value: T) -> Response<T> {

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -13,6 +15,7 @@ use jsonrpsee::server::ServerHandle;
 use magic_router::config::{RouterConfig, WebsocketConnectionConfig};
 use server::MockServer;
 use solana_pubkey::Pubkey;
+use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(8080);
@@ -21,7 +24,8 @@ pub struct TestEnv {
     chain: MockServer,
     er_nodes: HashMap<Pubkey, MockServer>,
     delegations: HashMap<Pubkey, Pubkey>,
-    pub router_client: Arc<RpcClient>,
+    pub router_client: RpcClient,
+    pub router_pubsub: Arc<PubsubClient>,
     handles: Vec<ServerHandle>,
 }
 
@@ -32,11 +36,11 @@ impl TestEnv {
         let mut handles = vec![handle];
 
         let router_port = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let listen_addr = host(router_port, false);
+        let listen_addr = host(router_port, None);
         let config = RouterConfig {
             listen_address: listen_addr,
-            base_chain_urls: vec![host(chain_port, true)],
-            max_connections: 1,
+            base_chain_urls: vec![host(chain_port, Some("http"))],
+            max_connections: 128,
             max_cached_delegations: 1024,
             max_subscriptions_per_connection: 128,
             websocket: WebsocketConnectionConfig {
@@ -44,16 +48,21 @@ impl TestEnv {
                 connections_per_upstream: 1,
             },
         };
-        let router_client = RpcClient::new(host(router_port, true)).into();
+        let router_client = RpcClient::new(host(router_port, Some("http")));
         let handle = magic_router::run(config)
             .await
             .expect("failed to start router");
         handles.push(handle);
         // wait for the servers to finish init
         sleep().await;
+        let router_pubsub = PubsubClient::new(&host::<String>(router_port, Some("ws")))
+            .await
+            .expect("failed to init pubsub client to router")
+            .into();
         Self {
             chain,
             router_client,
+            router_pubsub,
             er_nodes: HashMap::new(),
             delegations: HashMap::new(),
             handles,
@@ -74,11 +83,11 @@ impl TestEnv {
 
     pub async fn delegate_account(&mut self, pubkey: Pubkey, er_node: Pubkey) {
         self.delegations.insert(pubkey, er_node);
-        let owner = self.chain.delegate_account(pubkey, er_node).await;
         let Some(node) = self.er_nodes.get_mut(&er_node) else {
             return;
         };
-        node.add_account(pubkey, owner);
+        let account = self.chain.delegate_account(pubkey, er_node).await;
+        node.add_existing_account(pubkey, account);
         sleep().await;
     }
 
@@ -89,10 +98,10 @@ impl TestEnv {
         let Some(server) = self.er_nodes.get(&er_node) else {
             return;
         };
-        let Some(original_owner) = server.account_owner(&pubkey) else {
+        let Some(account) = server.account(&pubkey) else {
             return;
         };
-        self.chain.undelegate_account(pubkey, original_owner).await;
+        self.chain.undelegate_account(pubkey, account).await;
         sleep().await;
     }
 
@@ -131,14 +140,18 @@ pub async fn sleep() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
-fn host<T>(port: u16, with_schema: bool) -> T
+fn host<T>(port: u16, schema: Option<&str>) -> T
 where
     T: FromStr,
     <T as FromStr>::Err: Debug,
 {
     format!(
         "{}127.0.0.1:{port}",
-        if with_schema { "http://" } else { "" }
+        if let Some(schema) = schema {
+            format!("{schema}://")
+        } else {
+            "".into()
+        }
     )
     .parse()
     .unwrap()

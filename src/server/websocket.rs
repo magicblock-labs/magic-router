@@ -21,7 +21,7 @@ use crate::{
     types::{RequestId, SerdePubkey, SubscriberId, UniqueId},
 };
 
-const UPSTREAM_SUB_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
+const UPSTREAM_SUB_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct WebsocketServer {
     pub delegations: Arc<DelegationsCache>,
@@ -169,23 +169,11 @@ impl SubscriptionHandler {
                             tracing::debug!(id=id.0, "subscription has been confirmed");
                         }
                         PubsubMessage::Notification { payload, id } => {
-                            let params = payload.get("params");
-                            let Some(result) = params.and_then(|p| p.get("result")) else {
-                                tracing::warn!(
-                                    id=id.0,
-                                    ?payload,
-                                    "received unparsable notification in subscription handler"
-                                );
-                                continue;
-                            };
-                            self.handle_delegation_status_change(result, id).await;
-                            let Some(params) = params else {
-                                continue
-                            };
+                            self.handle_delegation_status_change(&payload, id).await;
                             let Ok(msg) = SubscriptionMessage::new(
                                 "accountNotification",
                                 self.sink.subscription_id(),
-                                params
+                                &payload
                             ) else {
                                 tracing::warn!("failed to serialize json value, should never happen");
                                 continue;

@@ -26,7 +26,7 @@ async fn test_get_account_info() {
     sleep().await;
     // delegate account to the ER, we spun up earlier
     env.delegate_account(pubkey, er_identity).await;
-    // chain account on main chain, updating its balance
+    // change the account on main chain, updating its balance
     env.update_account_balance(pubkey, 42, true).await;
 
     // fetch account via router, this should route the request to ER
@@ -39,15 +39,21 @@ async fn test_get_account_info() {
         account_from_ephem, account_from_chain,
         "account on ER shouldn't have been affected by on chain change"
     );
-    env.undelegate_account(pubkey).await;
+    env.update_account_balance(pubkey, 42, false).await;
     let account_from_ephem = env
         .router_client
         .get_account(&pubkey)
         .await
         .expect("failed to get account info from ephemeral after delegation");
-    assert_ne!(
+    env.undelegate_account(pubkey).await;
+    let account_from_chain = env
+        .router_client
+        .get_account(&pubkey)
+        .await
+        .expect("failed to get account info from ephemeral after delegation");
+    assert_eq!(
         account_from_ephem, account_from_chain,
-        "account shouldn't be the same after undelegation"
+        "account on chain and ephem should be the same after undelegation"
     );
 }
 
@@ -74,7 +80,7 @@ async fn test_get_account_balance() {
     sleep().await;
     // delegate account to the ER, we spun up earlier
     env.delegate_account(pubkey, er_identity).await;
-    // chain account on main chain, updating its balance
+    // change the account on main chain, updating its balance
     env.update_account_balance(pubkey, 42, true).await;
 
     // refetch account balance via router, this should route the request to ER
@@ -87,15 +93,21 @@ async fn test_get_account_balance() {
         balance_from_chain, balance_from_ephem,
         "account balance on ER shouldn't have been affected by on chain change"
     );
-    env.undelegate_account(pubkey).await;
+    env.update_account_balance(pubkey, 42, false).await;
     let balance_from_ephem = env
         .router_client
         .get_balance(&pubkey)
         .await
         .expect("failed to get account info from ephemeral after delegation");
-    assert_ne!(
+    env.undelegate_account(pubkey).await;
+    let balance_from_chain = env
+        .router_client
+        .get_balance(&pubkey)
+        .await
+        .expect("failed to get account info from ephemeral after delegation");
+    assert_eq!(
         balance_from_chain, balance_from_ephem,
-        "account balance on ER shouldn't be the same after undelegation"
+        "account balance on ER should be the same after undelegation"
     );
 }
 
@@ -121,7 +133,7 @@ async fn test_get_token_account_balance() {
     sleep().await;
     // delegate account to the ER, we spun up earlier
     env.delegate_account(pubkey, er_identity).await;
-    // chain account on main chain, updating its balance
+    // change the account on main chain, updating its token balance
     env.update_token_balance(pubkey, 42, true).await;
 
     // refetch token account balance via router, this should route the request to ER
@@ -134,13 +146,19 @@ async fn test_get_token_account_balance() {
         tokens_from_chain, tokens_from_ephem,
         "token account balance on ER shouldn't have been affected by on chain change"
     );
-    env.undelegate_account(pubkey).await;
+    env.update_token_balance(pubkey, 42, false).await;
     let tokens_from_ephem = env
         .router_client
         .get_token_account_balance(&pubkey)
         .await
         .expect("failed to get account info from ephemeral after delegation");
-    assert_ne!(
+    env.undelegate_account(pubkey).await;
+    let tokens_from_chain = env
+        .router_client
+        .get_token_account_balance(&pubkey)
+        .await
+        .expect("failed to get account info from ephemeral after delegation");
+    assert_eq!(
         tokens_from_chain, tokens_from_ephem,
         "token account balance shouldn't be the same after undelegation"
     );
@@ -161,7 +179,7 @@ async fn test_get_multiple_accounts() {
     env.add_account(pubkey1, owner);
     env.add_account(pubkey2, owner);
 
-    // request token account balance from chain
+    // request all accounts from chain
     let accounts_from_chain = env
         .router_client
         .get_multiple_accounts(&[pubkey1, pubkey2])
@@ -174,10 +192,10 @@ async fn test_get_multiple_accounts() {
     sleep().await;
     // delegate the first account to the ER, we spun up earlier
     env.delegate_account(pubkey1, er_identity).await;
-    // chain account on main chain, updating its balance
+    // change the account on main chain, updating its balance
     env.update_token_balance(pubkey1, 42, true).await;
 
-    // refetch token account balance via router, this should route the request to ER
+    // refetch accounts via router, this should fetch a union of results from chain and ER
     let accounts_from_ephem = env
         .router_client
         .get_multiple_accounts(&[pubkey1, pubkey2])
@@ -186,5 +204,22 @@ async fn test_get_multiple_accounts() {
     assert_eq!(
         accounts_from_chain, accounts_from_ephem,
         "both accounts should be in the same state as they were prior to delegation"
+    );
+    env.update_token_balance(pubkey1, 42, false).await;
+    let accounts_from_ephem = env
+        .router_client
+        .get_multiple_accounts(&[pubkey1, pubkey2])
+        .await
+        .expect("failed to get account info from ephemeral after delegation");
+    env.undelegate_account(pubkey1).await;
+    // refetch accounts via router, this should fetch all accounts from chain again
+    let accounts_from_chain = env
+        .router_client
+        .get_multiple_accounts(&[pubkey1, pubkey2])
+        .await
+        .expect("failed to get account info from ephemeral after delegation");
+    assert_eq!(
+        accounts_from_chain, accounts_from_ephem,
+        "both accounts should have been fetched from chain and both states should be the same after undelegation"
     );
 }
