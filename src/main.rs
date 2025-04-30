@@ -1,8 +1,8 @@
 use std::{env, fs::read_to_string};
 
-use magic_router::RouterResult;
+use router::RouterResult;
 
-use magic_router::config::RouterConfig;
+use router::config::RouterConfig;
 
 #[tokio::main]
 async fn main() -> RouterResult<()> {
@@ -16,7 +16,8 @@ async fn main() -> RouterResult<()> {
     let config = read_to_string(config_path)?;
     let config: RouterConfig =
         toml::from_str(&config).expect("failed to parse router configuration file");
-    let handle = magic_router::run(config).await?;
+    let handle = router::run(config).await?;
+    tracing::info!("Router is ready and running!");
     tokio::signal::ctrl_c().await?;
     let _ = handle.stop();
     handle.stopped().await;

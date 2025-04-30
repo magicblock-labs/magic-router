@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use magic_router::accounts::DELEGATION_PROGRAM_STR;
+use router::accounts::DELEGATION_PROGRAM_STR;
 use solana_pubkey::Pubkey;
 
 mod common;

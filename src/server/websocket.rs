@@ -96,6 +96,7 @@ impl WebsocketRpcServer for WebsocketServer {
     }
 }
 
+/// Client subscription handler
 struct SubscriptionHandler {
     pubkey: Pubkey,
     subscriber_id: SubscriberId,
@@ -109,6 +110,8 @@ struct SubscriptionHandler {
 }
 
 impl SubscriptionHandler {
+    /// Try to resubscribe to a different upstream in caes
+    /// of account's delegation status has been changed
     async fn handle_delegation_status_change(&mut self, notification: &json::Value, id: RequestId) {
         let Some(owner_str) = notification
             .get("value")

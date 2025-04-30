@@ -21,6 +21,8 @@ pub mod rpc;
 
 pub type RouterResult<T> = Result<T, RouterError>;
 
+/// Start the router service, this will start accpeting http and
+/// websocket requests on the same provided port
 pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
     let server = Server::builder()
         .enable_ws_ping(
@@ -68,5 +70,9 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         )
         .expect("ws and http servers have distinct method names");
 
+    tracing::info!(
+        "Listeninig for incoming connections on {}",
+        config.listen_address
+    );
     Ok(server.start(rpc_module))
 }

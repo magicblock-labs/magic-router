@@ -8,6 +8,8 @@ use crate::{pubsub::connection::WebsocketConnection, RouterResult};
 
 use super::subscription::SubscriptionAction;
 
+/// A websocket subscription routing hub. It manages all of the upstream connections
+/// and properly directs subscription requests to provided URLs
 pub struct SubscriptionDispatcher {
     upstream_state_rx: Receiver<WsUpstreamState>,
     requests_rx: Receiver<SubscriptionAction>,
@@ -16,6 +18,7 @@ pub struct SubscriptionDispatcher {
     connection_id: u32,
 }
 
+/// Current state of websocket upstream
 pub struct WsUpstreamState {
     pub is_online: bool,
     pub url: Arc<Url>,
@@ -41,6 +44,7 @@ impl SubscriptionDispatcher {
         self.connection_id += 1;
         let (tx, rx) = flume::bounded(1024);
 
+        // for each upstream, spawn the preconfigured number of connections
         for _ in 0..self.connections_per_upstream {
             let connection = WebsocketConnection::new(id, url.clone(), rx.clone()).await?;
             tokio::spawn(connection.run());
@@ -53,6 +57,7 @@ impl SubscriptionDispatcher {
         loop {
             tokio::select! {
                 Some(state) = self.upstream_state_rx.recv() => {
+                    // if upstream went offline, remove it from possible routes
                     if !state.is_online {
                         self.upstreams.remove(&state.url);
                         continue;
@@ -60,6 +65,7 @@ impl SubscriptionDispatcher {
                     if self.upstreams.contains_key(&state.url) {
                         continue;
                     }
+                    // if upstream is new, spawn new connections to it
                     if let Err(error) = self.try_spawn_connections(state.url.clone()).await {
                         tracing::error!(%error, "failed to init new ws connection to upstream");
                     }

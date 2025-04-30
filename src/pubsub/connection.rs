@@ -19,6 +19,7 @@ use super::subscription::{Subscription, SubscriptionAction};
 
 type SubscriptionsDB = HashMap<SubscriptionId, HashMap<SubscriberId, SubscriberHandle>>;
 
+/// Single websocket connection handler
 pub struct WebsocketConnection {
     id: u32,
     sender: Sender<Compat<EitherStream>>,

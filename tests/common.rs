@@ -12,7 +12,7 @@ use std::{
 };
 
 use jsonrpsee::server::ServerHandle;
-use magic_router::config::{RouterConfig, WebsocketConnectionConfig};
+use router::config::{RouterConfig, WebsocketConnectionConfig};
 use server::MockServer;
 use solana_pubkey::Pubkey;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
@@ -49,9 +49,7 @@ impl TestEnv {
             },
         };
         let router_client = RpcClient::new(host(router_port, Some("http")));
-        let handle = magic_router::run(config)
-            .await
-            .expect("failed to start router");
+        let handle = router::run(config).await.expect("failed to start router");
         handles.push(handle);
         // wait for the servers to finish init
         sleep().await;
