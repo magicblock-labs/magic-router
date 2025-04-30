@@ -1851,7 +1851,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "magic-router"
+name = "magicblock-rpc-router"
 version = "0.0.1"
 dependencies = [
  "borsh 1.5.7",

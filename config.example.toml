@@ -22,11 +22,10 @@ max-subscriptions-per-connection = 1024
 
 # WebSocket connection configuration
 [websocket]
-
 # The interval in seconds for sending ping messages to maintain WebSocket connections.
 # Example: 30
 ping-interval-sec = 30
 
-# The number of connections allowed per upstream WebSocket server.
+# The number of connections established per upstream WebSocket server.
 # Example: 5
 connections-per-upstream = 5
