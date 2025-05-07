@@ -13,7 +13,7 @@ use solana_account_decoder::{
 };
 use solana_rpc_client_api::{
     config::{RpcAccountInfoConfig, RpcContextConfig},
-    response::{Response, RpcResponseContext},
+    response::{Response, RpcIdentity, RpcResponseContext},
 };
 
 use crate::{
@@ -177,5 +177,10 @@ impl RoHttpRpcServer for HttpServer {
             .await
             .map_err(RouterError::from)
             .map_err(Into::into)
+    }
+
+    async fn identity(&self) -> RpcResult<RpcIdentity> {
+        let identity = self.routes.closest_node().to_string();
+        Ok(RpcIdentity { identity })
     }
 }

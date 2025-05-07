@@ -1,18 +1,24 @@
 use std::{
+    net::IpAddr,
     str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use borsh::BorshDeserialize;
+use futures::{stream::FuturesUnordered, StreamExt};
 use mdp::state::{record::ErRecord, status::ErStatus};
 use scc::HashMap;
 use solana_account::Account;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::{
+    sync::mpsc::{self, Sender},
+    time,
+};
 use url::Url;
 
 use crate::{
@@ -37,6 +43,8 @@ pub struct RoutingTable {
     dispatcher_tx: Sender<SubscriptionAction>,
     /// Channel endpoint to send websocket updates on routes back to routes manager
     upstream_state_tx: Sender<WsUpstreamState>,
+    /// Shared client, to perform ICMP ping request simultaneously to multiple upstream nodes
+    ping_client: Arc<ping::Client>,
 }
 
 impl RoutingTable {
@@ -44,6 +52,7 @@ impl RoutingTable {
         base_chain_urls: Vec<Url>,
         dispatcher_tx: Sender<SubscriptionAction>,
         upstream_state_tx: Sender<WsUpstreamState>,
+        proximity_ping_frequency: u64,
     ) -> RouterResult<Arc<Self>> {
         let upstreams = base_chain_urls
             .into_iter()
@@ -72,6 +81,7 @@ impl RoutingTable {
             base_chain,
             dispatcher_tx,
             upstream_state_tx,
+            ping_client: ping::Client::new(&Default::default())?.into(),
         });
         let accounts = this
             .base_chain()
@@ -81,7 +91,7 @@ impl RoutingTable {
         for (pubkey, account) in accounts {
             this.insert_entry(pubkey, account).await;
         }
-        tokio::spawn(this.clone().updater());
+        tokio::spawn(this.clone().updater(proximity_ping_frequency));
         Ok(this)
     }
 
@@ -104,6 +114,19 @@ impl RoutingTable {
             })
             .expect("fetch_update on atomic never returned None, cannot panic");
         &self.base_chain.upstreams[index]
+    }
+
+    pub fn closest_node(&self) -> Pubkey {
+        let mut node_id = Pubkey::default();
+        let mut min_proximity = u64::MAX;
+        self.inner.scan(|pubkey, record| {
+            if min_proximity <= record.proximity_ms {
+                return;
+            }
+            min_proximity = record.proximity_ms;
+            node_id = *pubkey;
+        });
+        node_id
     }
 
     async fn insert_entry(&self, pubkey: Pubkey, account: Account) {
@@ -150,7 +173,7 @@ impl RoutingTable {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn updater(self: Arc<Self>) {
+    async fn updater(self: Arc<Self>, proximity_ping_frequency: u64) {
         let (tx, mut rx) = mpsc::channel(1024);
         let request_id = RequestId::generate();
         let mut subscription = Subscription {
@@ -164,38 +187,74 @@ impl RoutingTable {
             .dispatcher_tx
             .send(SubscriptionAction::Subscribe(subscription.clone()))
             .await;
+        let mut ping_ticker = time::interval(Duration::from_millis(proximity_ping_frequency));
+        let mut pings = FuturesUnordered::new();
 
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                PubsubMessage::Subscribed(id) => {
-                    tracing::info!(id = id.0, "subscribed to MDP program accounts");
-                }
-                PubsubMessage::Notification { ref payload, .. } => {
-                    let Some(pubkey) = deserialize_field::<&str>(payload, &["value", "pubkey"])
-                        .and_then(|s| Pubkey::from_str(s).ok())
-                    else {
-                        tracing::warn!(?payload, "encounterd invalid websocket notification");
-                        continue;
-                    };
+        let mut ping_id = 0u16;
+        loop {
+            tokio::select! {
+                    Some(msg) = rx.recv() => {
+                        match msg {
+                            PubsubMessage::Subscribed(id) => {
+                                tracing::info!(id = id.0, "subscribed to MDP program accounts");
+                            }
+                            PubsubMessage::Notification { ref payload, .. } => {
+                                let Some(pubkey) = deserialize_field::<&str>(payload, &["value", "pubkey"])
+                                    .and_then(|s| Pubkey::from_str(s).ok())
+                                    else {
+                                        tracing::warn!(?payload, "encounterd invalid websocket notification");
+                                        continue;
+                                    };
 
-                    let Some(account) = deserialize_account(payload, &["value", "account"]) else {
-                        tracing::warn!(?payload, "encounterd invalid websocket notification");
-                        continue;
-                    };
+                                    let Some(account) = deserialize_account(payload, &["value", "account"]) else {
+                                        tracing::warn!(?payload, "encounterd invalid websocket notification");
+                                        continue;
+                                    };
 
-                    self.insert_entry(pubkey, account).await;
-                }
-                PubsubMessage::Disconnected(id) => {
-                    tracing::warn!(
-                        id = id.0,
-                        "MDP websocket subscription has been terminated, resubscribing"
-                    );
-                    subscription.destination = self.base_chain().ws_url.clone();
-                    let _ = self
-                        .dispatcher_tx
-                        .send(SubscriptionAction::Subscribe(subscription.clone()))
-                        .await;
-                }
+                                    self.insert_entry(pubkey, account).await;
+                            }
+                            PubsubMessage::Disconnected(id) => {
+                                tracing::warn!(
+                                    id = id.0,
+                                    "MDP websocket subscription has been terminated, resubscribing"
+                                );
+                                subscription.destination = self.base_chain().ws_url.clone();
+                                let _ = self
+                                    .dispatcher_tx
+                                    .send(SubscriptionAction::Subscribe(subscription.clone()))
+                                    .await;
+                                }
+                        }
+                    }
+                    ping = pings.next(), if !pings.is_empty() => {
+                        let Some(Ok((pubkey, duration))): Option<Result<(Pubkey, Duration), _>> = ping else {
+                            tracing::warn!(?ping, "failed to perform ping request");
+                            continue;
+                        };
+                        let Some(mut record) = self.inner.get(&pubkey) else {
+                            continue;
+                        };
+                        record.get_mut().proximity_ms = duration.as_millis() as u64;
+                    }
+                    _ = ping_ticker.tick() => {
+                        self.inner.scan(|&pubkey, record| {
+                            let client = self.ping_client.clone();
+                            ping_id = ping_id.wrapping_add(1);
+                            let addr = record.ip;
+                            let task = async move {
+                                let mut pinger = client.pinger(addr, ping_id.into()).await;
+                                pinger
+                                    .ping(ping_id.into(), b"")
+                                    .await
+                                    .map(|(_, dur)| (pubkey, dur))
+                            };
+                            pings.push(task);
+                        });
+                    }
+                    else => {
+                        tracing::info!("routing table update loop is ternimating");
+                        break;
+                    }
             }
         }
     }
@@ -209,20 +268,26 @@ struct BaseChainUpstreams {
 pub struct UpstreamRecord {
     pub client: Arc<RpcClient>,
     pub ws_url: Arc<Url>,
+    pub ip: IpAddr,
+    pub proximity_ms: u64,
 }
 
 impl UpstreamRecord {
     fn new_from_url(mut fqdn: Url) -> Option<Self> {
         let client = Arc::new(RpcClient::new(fqdn.to_string()));
+        let port = fqdn.port_or_known_default();
         let scheme = if fqdn.scheme() == "https" {
             "wss"
         } else {
             "ws"
         };
         fqdn.set_scheme(scheme).ok()?;
+        let ip = fqdn.socket_addrs(|| port).ok()?.first()?.ip();
         Some(UpstreamRecord {
             client,
             ws_url: Arc::new(fqdn),
+            proximity_ms: u64::MAX,
+            ip,
         })
     }
     fn new_from_str(fqdn: &str) -> Option<Self> {

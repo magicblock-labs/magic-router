@@ -32,7 +32,7 @@ use solana_account_decoder::{
 use solana_pubkey::Pubkey;
 use solana_rpc_client_api::{
     config::{RpcAccountInfoConfig, RpcContextConfig, RpcProgramAccountsConfig},
-    response::{Response, RpcResponseContext},
+    response::{Response, RpcIdentity, RpcResponseContext},
 };
 
 #[derive(Clone)]
@@ -107,7 +107,7 @@ impl MockServer {
         let msg =
             SubscriptionMessage::new("accountNotification", id, &self.response(uiaccount)).unwrap();
         if let Err(e) = sink.send(msg).await {
-            eprintln!("Failed to send subscription message: {:?}", e);
+            tracing::error!("Failed to send subscription message: {:?}", e);
         }
     }
 
@@ -264,6 +264,12 @@ impl RoHttpRpcServer for MockServer {
             ui_amount_string: ui_amount.to_string(),
         };
         Ok(self.response(ui_amount))
+    }
+
+    async fn identity(&self) -> RpcResult<RpcIdentity> {
+        Ok(RpcIdentity {
+            identity: Pubkey::default().to_string(),
+        })
     }
 }
 

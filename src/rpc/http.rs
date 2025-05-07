@@ -2,7 +2,7 @@ use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use solana_account_decoder::{parse_token::UiTokenAmount, UiAccount};
 use solana_rpc_client_api::{
     config::{RpcAccountInfoConfig, RpcContextConfig},
-    response::Response,
+    response::{Response, RpcIdentity},
 };
 
 use crate::types::SerdePubkey;
@@ -36,4 +36,7 @@ pub trait RoHttpRpc {
         pubkey: SerdePubkey,
         params: Option<RpcContextConfig>,
     ) -> RpcResult<Response<UiTokenAmount>>;
+
+    #[method(name = "getIdentity")]
+    async fn identity(&self) -> RpcResult<RpcIdentity>;
 }

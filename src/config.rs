@@ -12,6 +12,7 @@ pub struct RouterConfig {
     pub max_connections: u32,
     pub max_subscriptions_per_connection: u32,
     pub websocket: WebsocketConnectionConfig,
+    pub proximity_ping_frequency_sec: u64,
 }
 
 #[derive(Deserialize)]

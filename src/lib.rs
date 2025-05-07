@@ -45,6 +45,7 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         config.base_chain_urls,
         requests_tx.clone(),
         upstream_state_tx,
+        config.proximity_ping_frequency_sec,
     )
     .await?;
 
