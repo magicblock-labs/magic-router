@@ -43,6 +43,9 @@ requests:
 2. [getMultipleAccounts](https://solana.com/docs/rpc/http/getmultipleaccounts)
 3. [getBalance](https://solana.com/docs/rpc/http/getbalance)
 4. [getTokenAccountBalance](https://solana.com/docs/rpc/http/gettokenaccountbalance)
+5. [getIdentity](https://solana.com/docs/rpc/http/getidentity), this method is
+   used to return an identity of the ER validator which is closest to the
+   router, latency wise.
 
 ## Supported WebSocket Subscriptions
 
