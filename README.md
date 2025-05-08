@@ -86,6 +86,9 @@ max-connections = 1024
 # Maximum subscriptions allowed per connection.
 max-subscriptions-per-connection = 1024
 
+# Frequency of ping requests, performed to upstream nodes, to determine their proximity (latency wise)
+proximity-ping-frequency-sec = 30
+
 # WebSocket Configuration
 [websocket]
 # Ping interval for maintaining WebSocket connections, in seconds.

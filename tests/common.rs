@@ -17,6 +17,7 @@ use server::MockServer;
 use solana_pubkey::Pubkey;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use tracing_subscriber::FmtSubscriber;
 
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(8080);
 
@@ -31,6 +32,11 @@ pub struct TestEnv {
 
 impl TestEnv {
     pub async fn init() -> Self {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+
         let chain_port = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
         let (chain, handle) = MockServer::start(chain_port).await;
         let mut handles = vec![handle];
@@ -47,6 +53,7 @@ impl TestEnv {
                 ping_interval_sec: 10,
                 connections_per_upstream: 1,
             },
+            proximity_ping_frequency_sec: 1,
         };
         let router_client = RpcClient::new(host(router_port, Some("http")));
         let handle = router::run(config).await.expect("failed to start router");

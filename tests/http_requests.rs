@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use common::{sleep, TestEnv};
 use solana_pubkey::Pubkey;
 
@@ -221,5 +223,30 @@ async fn test_get_multiple_accounts() {
     assert_eq!(
         accounts_from_chain, accounts_from_ephem,
         "both accounts should have been fetched from chain and both states should be the same after undelegation"
+    );
+}
+
+#[tokio::test]
+async fn test_get_identity() {
+    let mut env = TestEnv::init().await;
+
+    let er_identity1 = Pubkey::new_unique();
+    let er_identity2 = Pubkey::new_unique();
+
+    // spin up 2 new mock ephemerals
+    env.add_route(er_identity1).await;
+    env.add_route(er_identity2).await;
+    // give the router time to sync up with ephemerals
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // refetch accounts via router, this should fetch a union of results from chain and ER
+    let identity = env
+        .router_client
+        .get_identity()
+        .await
+        .expect("failed to get closest ER identity from router");
+    assert!(
+        identity.eq(&er_identity2) || identity.eq(&er_identity1),
+        "identity should match on of the added routes"
     );
 }
