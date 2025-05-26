@@ -38,7 +38,7 @@ solana-rpc-client = { version = "2.2" }
 solana-commitment-config = { version = "2.2" }
 
 # programs 
-mdp = { package = "magic-domain-program", git = "https://github.com/magicblock-labs/magic-domain-program.git", rev = "eba7644" } 
+mdp = { package = "magic-domain-program", git = "https://github.com/magicblock-labs/magic-domain-program.git", rev = "1f8b2fd" } 
 
 # sync
 flume = "0.11"
