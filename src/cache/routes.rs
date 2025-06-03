@@ -43,8 +43,10 @@ pub struct RoutingTable {
     dispatcher_tx: Sender<SubscriptionAction>,
     /// Channel endpoint to send websocket updates on routes back to routes manager
     upstream_state_tx: Sender<WsUpstreamState>,
-    /// Shared client, to perform ICMP ping request simultaneously to multiple upstream nodes
-    ping_client: Arc<ping::Client>,
+    /// Shared client, to perform ICMP V4 ping request simultaneously to multiple upstream nodes
+    ping_client_v4: Arc<ping::Client>,
+    /// Shared client, to perform ICMP V6 ping request simultaneously to multiple upstream nodes
+    ping_client_v6: Arc<ping::Client>,
 }
 
 impl RoutingTable {
@@ -81,7 +83,12 @@ impl RoutingTable {
             base_chain,
             dispatcher_tx,
             upstream_state_tx,
-            ping_client: ping::Client::new(&Default::default())?.into(),
+            ping_client_v4: ping::Client::new(&Default::default())?.into(),
+            ping_client_v6: ping::Client::new(&ping::Config {
+                kind: ping::ICMP::V6,
+                ..Default::default()
+            })?
+            .into(),
         });
         let accounts = this
             .base_chain()
@@ -239,9 +246,13 @@ impl RoutingTable {
                     }
                     _ = ping_ticker.tick() => {
                         self.inner.scan(|&pubkey, record| {
-                            let client = self.ping_client.clone();
                             ping_id = ping_id.wrapping_add(1);
                             let addr = record.ip;
+                            let client = if addr.is_ipv4() {
+                                self.ping_client_v4.clone()
+                            } else {
+                                self.ping_client_v6.clone()
+                            };
                             tracing::info!("pinging {addr}");
                             let task = async move {
                                 let mut pinger = client.pinger(addr, ping_id.into()).await;

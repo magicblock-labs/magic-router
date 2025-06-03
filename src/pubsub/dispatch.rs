@@ -74,7 +74,7 @@ impl SubscriptionDispatcher {
                     }
                     // if upstream is new, spawn new connections to it
                     if let Err(error) = self.try_spawn_connections(state.url.clone()).await {
-                        tracing::error!(%error, "failed to init new ws connection to upstream");
+                        tracing::error!(%error, url=%state.url, "failed to init new ws connection to upstream");
                     }
                 }
                 Some(request) = self.requests_rx.recv() => {

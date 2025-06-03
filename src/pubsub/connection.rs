@@ -67,6 +67,7 @@ impl WebsocketConnection {
         // it in select! causes partial reads and all of the ensuing chaos
         let mut future = self.receiver.receive();
         let mut receiving = unsafe { Pin::new_unchecked(&mut future) };
+        tracing::info!(url=%self.url, "started websocket new connection");
         macro_rules! reset_receiving_future {
             () => {
                 drop(future);
