@@ -187,7 +187,7 @@ impl RoutingTable {
             .dispatcher_tx
             .send(SubscriptionAction::Subscribe(subscription.clone()))
             .await;
-        let mut ping_ticker = time::interval(Duration::from_millis(proximity_ping_frequency));
+        let mut ping_ticker = time::interval(Duration::from_secs(proximity_ping_frequency));
         let mut pings = FuturesUnordered::new();
 
         let mut ping_id = 0u16;
@@ -235,12 +235,14 @@ impl RoutingTable {
                             continue;
                         };
                         record.get_mut().proximity_ms = duration.as_millis() as u64;
+                        tracing::info!("ping to {} took {}ms", record.ip, record.proximity_ms);
                     }
                     _ = ping_ticker.tick() => {
                         self.inner.scan(|&pubkey, record| {
                             let client = self.ping_client.clone();
                             ping_id = ping_id.wrapping_add(1);
                             let addr = record.ip;
+                            tracing::info!("pinging {addr}");
                             let task = async move {
                                 let mut pinger = client.pinger(addr, ping_id.into()).await;
                                 pinger
