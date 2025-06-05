@@ -1,35 +1,54 @@
 use std::{
     collections::HashMap,
+    rc::Rc,
+    str::FromStr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
 };
 
+use base64::Engine;
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
-use jsonrpsee::core::{async_trait, RpcResult};
+use jsonrpsee::{
+    core::{async_trait, RpcResult},
+    types::ErrorObjectOwned,
+};
 use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
 };
+use solana_rpc_client::rpc_client::SerializableTransaction;
 use solana_rpc_client_api::{
-    config::{RpcAccountInfoConfig, RpcContextConfig},
-    response::{Response, RpcIdentity, RpcResponseContext},
+    config::{
+        RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig, RpcTransactionConfig,
+    },
+    response::{Response, RpcResponseContext},
+};
+use solana_signature::Signature;
+use solana_transaction::{versioned::VersionedTransaction, Transaction};
+use solana_transaction_status_client_types::{
+    EncodedConfirmedTransactionWithStatusMeta, TransactionStatus, UiTransactionEncoding,
 };
 
 use crate::{
     accounts::DelegationStatus,
-    cache::{delegations::DelegationsCache, routes::RoutingTable},
+    cache::{
+        delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
+    },
     error::RouterError,
-    rpc::http::RoHttpRpcServer,
-    types::SerdePubkey,
+    rpc::http::{RoHttpRpcServer, RwHttpRpcServer},
+    types::{RouteInfo, RpcIdentity, SerdePubkey},
 };
 
 /// Http server implementation for handling solana JSON-RPC requests
+#[derive(Clone)]
 pub struct HttpServer {
     /// Database of delegation states of accounts
     pub delegations: Arc<DelegationsCache>,
     /// Database of routes to upstream ER nodes or base layer chain
     pub routes: Arc<RoutingTable>,
+    /// Fixed capacity cache of transactions, sent through the router
+    pub transactions: Arc<ForwardedTransactions>,
 }
 
 #[async_trait]
@@ -180,7 +199,122 @@ impl RoHttpRpcServer for HttpServer {
     }
 
     async fn identity(&self) -> RpcResult<RpcIdentity> {
-        let identity = self.routes.closest_node().to_string();
-        Ok(RpcIdentity { identity })
+        let (identity, fqdn) = self.routes.closest_node();
+        Ok(RpcIdentity { identity, fqdn })
+    }
+
+    async fn signature_statuses(
+        &self,
+        signatures: Vec<String>,
+    ) -> RpcResult<Response<Vec<Option<TransactionStatus>>>> {
+        let signatures = signatures
+            .into_iter()
+            .map(|s| Signature::from_str(&s).map_err(RouterError::decode_error))
+            .collect::<Result<Vec<_>, RouterError>>()?;
+        let Some(sig) = signatures.first() else {
+            return Ok(Response {
+                context: RpcResponseContext::new(0),
+                value: vec![],
+            });
+        };
+        let Some(client) = self.transactions.get(sig).await else {
+            return Ok(Response {
+                context: RpcResponseContext::new(0),
+                value: vec![],
+            });
+        };
+        client
+            .get_signature_statuses(&signatures)
+            .await
+            .map_err(RouterError::from)
+            .map_err(Into::into)
+    }
+
+    async fn transaction(
+        &self,
+        signature: String,
+        params: Option<RpcTransactionConfig>,
+    ) -> RpcResult<Option<Rc<EncodedConfirmedTransactionWithStatusMeta>>> {
+        let signature = Signature::from_str(&signature).map_err(RouterError::decode_error)?;
+        let Some(client) = self.transactions.get(&signature).await else {
+            return Ok(None);
+        };
+        client
+            .get_transaction_with_config(&signature, params.unwrap_or_default())
+            .await
+            .map_err(RouterError::from)
+            .map_err(Into::into)
+            .map(|t| Some(Rc::new(t)))
+    }
+
+    async fn routes(&self) -> RpcResult<Vec<RouteInfo>> {
+        Ok(self.routes.all_routes().await)
+    }
+}
+
+#[async_trait]
+impl RwHttpRpcServer for HttpServer {
+    async fn send_transaction(
+        &self,
+        txn: String,
+        params: Option<RpcSendTransactionConfig>,
+    ) -> RpcResult<String> {
+        let params = params.unwrap_or_default();
+        let encoding = params.encoding.unwrap_or(UiTransactionEncoding::Base58);
+        let txn = match encoding {
+            UiTransactionEncoding::Base58 | UiTransactionEncoding::Binary => bs58::decode(&txn)
+                .into_vec()
+                .map_err(RouterError::decode_error)?,
+            UiTransactionEncoding::Base64 => base64::prelude::BASE64_STANDARD
+                .decode(txn)
+                .map_err(RouterError::decode_error)?,
+            other => {
+                return Err(ErrorObjectOwned::owned(
+                    1,
+                    format!("{other} transaction encoding is not supported"),
+                    None::<()>,
+                ))
+            }
+        };
+        let txn = if let Ok(txn) = bincode::deserialize::<VersionedTransaction>(&txn) {
+            txn
+        } else {
+            bincode::deserialize::<Transaction>(&txn)
+                .map(VersionedTransaction::from)
+                .map_err(RouterError::decode_error)?
+        };
+        let mut delegated = None;
+        for (i, pk) in txn.message.static_account_keys().iter().enumerate() {
+            if !txn.message.is_maybe_writable(i, None) {
+                continue;
+            }
+            let DelegationStatus::Delegated(validator) =
+                self.delegations.get_delegation_status(*pk).await
+            else {
+                continue;
+            };
+            let Some(old) = delegated.replace(validator) else {
+                continue;
+            };
+            if old != validator {
+                Err(RouterError::ConflictingDelegations)?;
+            }
+        }
+        let client = match delegated {
+            Some(identity) => self
+                .routes
+                .ephemeral_client(&identity)
+                .ok_or_else(|| RouterError::UnknownErNode(identity))?,
+            None => self.routes.base_chain().client.clone(),
+        };
+        self.transactions
+            .track(*txn.get_signature(), client.clone())
+            .await;
+        client
+            .send_transaction_with_config(&txn, params)
+            .await
+            .map_err(RouterError::from)
+            .map_err(Into::into)
+            .map(|s| s.to_string())
     }
 }

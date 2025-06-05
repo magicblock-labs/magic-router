@@ -27,7 +27,7 @@ use crate::{
         notification::{deserialize_account, deserialize_field, PubsubMessage},
         subscription::{program_subscription_json, Subscription, SubscriptionAction},
     },
-    types::{RequestId, SubscriberId, UniqueId},
+    types::{RequestId, RouteInfo, SerdePubkey, SubscriberId, UniqueId},
     RouterResult,
 };
 
@@ -59,7 +59,8 @@ impl RoutingTable {
         let upstreams = base_chain_urls
             .into_iter()
             .map(|url| {
-                UpstreamRecord::new_from_url(url).expect("invalid base chain url was provided")
+                UpstreamRecord::new_from_url(url, None)
+                    .expect("invalid base chain url was provided")
             })
             .collect::<Vec<_>>();
 
@@ -123,8 +124,9 @@ impl RoutingTable {
         &self.base_chain.upstreams[index]
     }
 
-    pub fn closest_node(&self) -> Pubkey {
+    pub fn closest_node(&self) -> (SerdePubkey, String) {
         let mut node_id = Pubkey::default();
+        let mut fqdn = String::default();
         let mut min_proximity = u64::MAX;
         self.inner.scan(|pubkey, record| {
             if min_proximity <= record.proximity_ms {
@@ -132,8 +134,21 @@ impl RoutingTable {
             }
             min_proximity = record.proximity_ms;
             node_id = *pubkey;
+            fqdn = record.client.url()
         });
-        node_id
+        (SerdePubkey(node_id), fqdn)
+    }
+
+    pub async fn all_routes(&self) -> Vec<RouteInfo> {
+        let mut routes = Vec::new();
+        self.inner
+            .scan_async(|_, r| {
+                if let Some(ref info) = r.info {
+                    routes.push(info.clone())
+                }
+            })
+            .await;
+        routes
     }
 
     async fn insert_entry(&self, pubkey: Pubkey, account: Account) {
@@ -145,9 +160,8 @@ impl RoutingTable {
             }
             return;
         };
-        let fqdn = record.addr();
 
-        let Some(upstream) = UpstreamRecord::new_from_str(fqdn) else {
+        let Some(upstream) = UpstreamRecord::new_from_er_record(&record) else {
             tracing::warn!(%pubkey, "domain registry account didn't have proper FQDN");
             return;
         };
@@ -283,10 +297,11 @@ pub struct UpstreamRecord {
     pub ws_url: Arc<Url>,
     pub ip: IpAddr,
     pub proximity_ms: u64,
+    pub info: Option<RouteInfo>,
 }
 
 impl UpstreamRecord {
-    fn new_from_url(mut fqdn: Url) -> Option<Self> {
+    fn new_from_url(mut fqdn: Url, info: Option<RouteInfo>) -> Option<Self> {
         let client = Arc::new(RpcClient::new(fqdn.to_string()));
         let port = fqdn.port_or_known_default();
         let scheme = if fqdn.scheme() == "https" {
@@ -301,9 +316,11 @@ impl UpstreamRecord {
             ws_url: Arc::new(fqdn),
             proximity_ms: u64::MAX,
             ip,
+            info,
         })
     }
-    fn new_from_str(fqdn: &str) -> Option<Self> {
+    fn new_from_er_record(er_record: &ErRecord) -> Option<Self> {
+        let fqdn = er_record.addr();
         let Ok(fqdn) = Url::parse(fqdn) else {
             tracing::warn!(
                 fqdn,
@@ -311,6 +328,7 @@ impl UpstreamRecord {
             );
             return None;
         };
-        Self::new_from_url(fqdn)
+        let info = RouteInfo::from(er_record);
+        Self::new_from_url(fqdn, Some(info))
     }
 }

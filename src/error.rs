@@ -12,11 +12,21 @@ pub enum RouterError {
     Io(#[from] std::io::Error),
     #[error("account has been delegated to unknown ER node: {0}")]
     UnknownErNode(Pubkey),
+    #[error("failed to decode request parameters: {0}")]
+    DecodeError(Box<dyn std::error::Error + 'static>),
+    #[error("transaction contains accounts that were delegated to different ER nodes")]
+    ConflictingDelegations,
 }
 
 // TODO @@@ implement errors
 impl From<RouterError> for ErrorObject<'_> {
     fn from(value: RouterError) -> Self {
         ErrorObject::owned::<()>(0, value.to_string(), None)
+    }
+}
+
+impl RouterError {
+    pub fn decode_error<E: std::error::Error + 'static>(error: E) -> Self {
+        Self::DecodeError(Box::new(error))
     }
 }

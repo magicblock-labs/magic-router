@@ -46,6 +46,20 @@ requests:
 5. [getIdentity](https://solana.com/docs/rpc/http/getidentity), this method is
    used to return an identity of the ER validator which is closest to the
    router, latency wise.
+6. [sendTransaction](https://solana.com/docs/rpc/http/sendtransaction) - the
+   sent transaction is parsed to extract all the explicitly referenced
+   writeable accounts (lookup tables are not supported). If any of those
+   accounts is delegated then all of the delegated writeable accounts in the
+   transaction should be delegated to the same ER, otherwise the method will
+   return an error. The matched route for the transaction signature will linger
+   in the router for a while, so, methods like `getSignatureStatuses` or
+   `getTransaction` can be routed to the same upstream
+7.
+[getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) -
+only makes sense for transactions which were recently sent through the router
+8. [getTransaction](https://solana.com/docs/rpc/http/gettransaction) - only
+   makes sense for transactions which were recently sent through the router
+9. **getRoutes** - a custom endpoint to query all the ER nodes known to the router
 
 ## Supported WebSocket Subscriptions
 

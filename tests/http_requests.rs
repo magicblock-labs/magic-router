@@ -1,7 +1,17 @@
 use std::time::Duration;
 
 use common::{sleep, TestEnv};
+use json::{JsonContainerTrait, JsonValueTrait};
+use reqwest::header::CONTENT_TYPE;
+use solana_hash::Hash;
+use solana_keypair::Keypair;
 use solana_pubkey::Pubkey;
+use solana_rpc_client_api::config::RpcTransactionConfig;
+use solana_signature::Signature;
+use solana_system_transaction::transfer;
+use solana_transaction::versioned::VersionedTransaction;
+use solana_transaction_status_client_types::UiTransactionEncoding;
+use url::Url;
 
 mod common;
 
@@ -239,7 +249,6 @@ async fn test_get_identity() {
     // give the router time to sync up with ephemerals
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // refetch accounts via router, this should fetch a union of results from chain and ER
     let identity = env
         .router_client
         .get_identity()
@@ -248,5 +257,151 @@ async fn test_get_identity() {
     assert!(
         identity.eq(&er_identity2) || identity.eq(&er_identity1),
         "identity should match on of the added routes"
+    );
+}
+
+#[tokio::test]
+async fn test_get_signature_statuses() {
+    let env = TestEnv::init().await;
+
+    let statuses = env
+        .router_client
+        .get_signature_statuses(&[Signature::default(); 2])
+        .await
+        .expect("failed to get signature statuses from router");
+    assert!(statuses
+        .value
+        .into_iter()
+        .all(|s| s.is_some_and(|s| s.status.is_ok())))
+}
+
+#[tokio::test]
+async fn test_get_transaction() {
+    let env = TestEnv::init().await;
+
+    let result = env
+        .router_client
+        .get_transaction_with_config(
+            &Signature::default(),
+            RpcTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    let txn = transfer(
+        &Keypair::new(),
+        &Pubkey::new_unique(),
+        1000,
+        Hash::default(),
+    );
+    let sig = txn.signatures[0];
+    env.router_client
+        .send_transaction(&txn)
+        .await
+        .expect("failed to send legacy transaction via router");
+    let result = env
+        .router_client
+        .get_transaction_with_config(
+            &sig,
+            RpcTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_send_transaction() {
+    let env = TestEnv::init().await;
+
+    let txn = transfer(
+        &Keypair::new(),
+        &Pubkey::new_unique(),
+        1000,
+        Hash::default(),
+    );
+    let sig = txn.signatures[0];
+    let result = env
+        .router_client
+        .send_transaction(&txn)
+        .await
+        .expect("failed to send legacy transaction via router");
+    assert_eq!(
+        sig, result,
+        "signature mismatch in the sendTransaction result for legacy txn"
+    );
+    let result = env
+        .router_client
+        .send_transaction(&VersionedTransaction::from(txn))
+        .await
+        .expect("failed to send versioned transaction via router for legacy txn");
+    assert_eq!(
+        sig, result,
+        "signature mismatch in the sendTransaction result for versioned txn"
+    )
+}
+
+#[tokio::test]
+async fn test_get_routes() {
+    let mut env = TestEnv::init().await;
+    let client = reqwest::Client::new();
+    let er_identity1 = Pubkey::new_unique();
+    let er_identity2 = Pubkey::new_unique();
+
+    // spin up 2 new mock ephemerals
+    env.add_route(er_identity1).await;
+    env.add_route(er_identity2).await;
+    // give the router time to sync up with ephemerals
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let response = client
+        .post(env.router_client.url().parse::<Url>().unwrap())
+        .header(CONTENT_TYPE, "application/json")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"getRoutes"}"#)
+        .send()
+        .await
+        .expect("failed to send getRoutes request to the router");
+    let response = response
+        .text()
+        .await
+        .expect("recieved garbage response for getRoutes");
+    let response = json::from_str::<json::Value>(&response);
+    let array = response
+        .get("result")
+        .and_then(|r| r.as_array())
+        .expect("getRoutes json contains invalid data");
+    for el in array {
+        let identity = el
+            .get("identity")
+            .and_then(|s| s.as_str())
+            .expect("getRoutes response contains malformed route info");
+        assert!(identity == er_identity1.to_string() || identity == er_identity2.to_string())
+    }
+}
+
+#[ignore = "send_and_confirm_transaction uses blockhash related method which are not supported by the router"]
+#[tokio::test]
+async fn test_send_and_confirm_transaction() {
+    let env = TestEnv::init().await;
+
+    let txn = transfer(
+        &Keypair::new(),
+        &Pubkey::new_unique(),
+        1000,
+        Hash::default(),
+    );
+    let sig = txn.signatures[0];
+    let result = env
+        .router_client
+        .send_and_confirm_transaction(&txn)
+        .await
+        .expect("failed to send legacy transaction via router");
+    assert_eq!(
+        sig, result,
+        "signature mismatch in the sendTransaction result"
     );
 }
