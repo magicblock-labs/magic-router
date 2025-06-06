@@ -17,12 +17,13 @@ use jsonrpsee::{
 use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
 };
+use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::rpc_client::SerializableTransaction;
 use solana_rpc_client_api::{
     config::{
         RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig, RpcTransactionConfig,
     },
-    response::{Response, RpcResponseContext},
+    response::{Response, RpcBlockhash, RpcResponseContext},
 };
 use solana_signature::Signature;
 use solana_transaction::{versioned::VersionedTransaction, Transaction};
@@ -249,6 +250,39 @@ impl RoHttpRpcServer for HttpServer {
 
     async fn routes(&self) -> RpcResult<Vec<RouteInfo>> {
         Ok(self.routes.all_routes().await)
+    }
+
+    async fn blockhash_for_accounts(&self, accounts: Vec<SerdePubkey>) -> RpcResult<RpcBlockhash> {
+        let mut delegated = None;
+        for pk in accounts {
+            let DelegationStatus::Delegated(validator) =
+                self.delegations.get_delegation_status(pk.0).await
+            else {
+                continue;
+            };
+            let Some(old) = delegated.replace(validator) else {
+                continue;
+            };
+            if old != validator {
+                Err(RouterError::ConflictingDelegations)?;
+            }
+        }
+        let client = match delegated {
+            Some(identity) => self
+                .routes
+                .ephemeral_client(&identity)
+                .ok_or_else(|| RouterError::UnknownErNode(identity))?,
+            None => self.routes.base_chain().client.clone(),
+        };
+        let (hash, slot) = client
+            .get_latest_blockhash_with_commitment(CommitmentConfig::confirmed())
+            .await
+            .map_err(RouterError::from)?;
+        let response = RpcBlockhash {
+            blockhash: hash.to_string(),
+            last_valid_block_height: slot,
+        };
+        Ok(response)
     }
 }
 

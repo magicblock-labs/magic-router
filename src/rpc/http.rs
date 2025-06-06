@@ -6,7 +6,7 @@ use solana_rpc_client_api::{
     config::{
         RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig, RpcTransactionConfig,
     },
-    response::Response,
+    response::{Response, RpcBlockhash},
 };
 use solana_transaction_status_client_types::{
     EncodedConfirmedTransactionWithStatusMeta, TransactionStatus,
@@ -62,6 +62,9 @@ pub trait RoHttpRpc {
 
     #[method(name = "getRoutes")]
     async fn routes(&self) -> RpcResult<Vec<RouteInfo>>;
+
+    #[method(name = "getBlockhashForAccounts")]
+    async fn blockhash_for_accounts(&self, accounts: Vec<SerdePubkey>) -> RpcResult<RpcBlockhash>;
 }
 
 #[rpc(server)]
