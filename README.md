@@ -54,12 +54,18 @@ requests:
    return an error. The matched route for the transaction signature will linger
    in the router for a while, so, methods like `getSignatureStatuses` or
    `getTransaction` can be routed to the same upstream
-7.
-[getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) -
+7. [getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) -
 only makes sense for transactions which were recently sent through the router
 8. [getTransaction](https://solana.com/docs/rpc/http/gettransaction) - only
    makes sense for transactions which were recently sent through the router
-9. **getRoutes** - a custom endpoint to query all the ER nodes known to the router
+9. **getRoutes** - a custom method to query all the ER nodes known to the
+   router
+9. **getBlockHashForAccounts** - another custom method to query the blockhash
+   for the provided list of accounts. The list of accounts is usually delegated
+   writeable accounts from the transaction that needs to be signed. If the
+   accounts are delegated to different ER nodes, the method will return an
+   error. If the accounts are not delegated the returned blockhash is from the
+   base chain.
 
 ## Supported WebSocket Subscriptions
 
