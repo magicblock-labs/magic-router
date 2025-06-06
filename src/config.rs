@@ -9,6 +9,7 @@ pub struct RouterConfig {
     pub listen_address: SocketAddr,
     pub base_chain_urls: Vec<Url>,
     pub max_cached_delegations: usize,
+    pub max_cached_transactions: usize,
     pub max_connections: u32,
     pub max_subscriptions_per_connection: u32,
     pub websocket: WebsocketConnectionConfig,

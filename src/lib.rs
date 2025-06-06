@@ -1,11 +1,16 @@
 use std::time::Duration;
 
-use cache::{delegations::DelegationsCache, routes::RoutingTable};
+use cache::{
+    delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
+};
 use config::RouterConfig;
 use error::RouterError;
 use jsonrpsee::server::{PingConfig, Server, ServerHandle};
 use pubsub::dispatch::SubscriptionDispatcher;
-use rpc::{http::RoHttpRpcServer, websocket::WebsocketRpcServer};
+use rpc::{
+    http::{RoHttpRpcServer, RwHttpRpcServer},
+    websocket::WebsocketRpcServer,
+};
 use server::{http::HttpServer, websocket::WebsocketServer};
 use tokio::sync::mpsc;
 
@@ -55,11 +60,15 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         config.max_cached_delegations,
     );
 
-    let mut rpc_module = HttpServer {
+    let handler = HttpServer {
         delegations: delegations.clone(),
         routes: routes.clone(),
-    }
-    .into_rpc();
+        transactions: ForwardedTransactions::new(config.max_cached_transactions).into(),
+    };
+    let mut rpc_module = RoHttpRpcServer::into_rpc(handler.clone());
+    rpc_module
+        .merge(RwHttpRpcServer::into_rpc(handler.clone()))
+        .expect("RW and RO servers have distinct method names");
     rpc_module
         .merge(
             WebsocketServer {

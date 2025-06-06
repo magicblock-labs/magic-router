@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::atomic::AtomicU64;
 
 use json::{Deserialize, Serialize};
+use mdp::state::record::ErRecord;
 use serde::de::{self, Visitor};
 use serde::{Deserializer, Serializer};
 use solana_pubkey::Pubkey;
@@ -82,5 +83,33 @@ impl<'de> Deserialize<'de> for SerdePubkey {
             }
         }
         deserializer.deserialize_str(SerdePubkeyVisitor)
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct RpcIdentity {
+    pub identity: SerdePubkey,
+    pub fqdn: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteInfo {
+    pub identity: SerdePubkey,
+    pub fqdn: String,
+    pub base_fee: u16,
+    pub block_time_ms: u16,
+    pub country_code: String,
+}
+
+impl From<&ErRecord> for RouteInfo {
+    fn from(er_record: &ErRecord) -> Self {
+        Self {
+            identity: SerdePubkey(*er_record.identity()),
+            fqdn: er_record.addr().to_string(),
+            base_fee: er_record.base_fee(),
+            block_time_ms: er_record.block_time_ms(),
+            country_code: er_record.country_code().as_str().to_string(),
+        }
     }
 }

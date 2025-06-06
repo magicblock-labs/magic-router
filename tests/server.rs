@@ -1,5 +1,6 @@
 use std::{
     net::SocketAddr,
+    rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -7,12 +8,14 @@ use std::{
     time::Duration,
 };
 
-use borsh::BorshSerialize;
+use base64::Engine;
+use borsh::{BorshDeserialize, BorshSerialize};
 use json::Serialize;
 use jsonrpsee::{
     core::{async_trait, RpcResult, SubscriptionResult},
     proc_macros::rpc,
     server::{PingConfig, Server, ServerHandle},
+    types::ErrorObjectOwned,
     PendingSubscriptionSink, SubscriptionMessage, SubscriptionSink,
 };
 use mdp::state::{
@@ -21,18 +24,32 @@ use mdp::state::{
 use router::{
     accounts::{DELEGATION_PROGRAM, DELEGATION_RECORD_DATA_SIZE},
     cache::delegations::delegation_record_pda,
-    rpc::{http::RoHttpRpcServer, websocket::WebsocketRpcServer},
-    types::SerdePubkey,
+    error::RouterError,
+    rpc::{
+        http::{RoHttpRpcServer, RwHttpRpcServer},
+        websocket::WebsocketRpcServer,
+    },
+    types::{RouteInfo, RpcIdentity, SerdePubkey},
 };
 use scc::HashMap;
 use solana_account::{Account, ReadableAccount, WritableAccount};
 use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
 };
+use solana_hash::Hash;
 use solana_pubkey::Pubkey;
 use solana_rpc_client_api::{
-    config::{RpcAccountInfoConfig, RpcContextConfig, RpcProgramAccountsConfig},
-    response::{Response, RpcIdentity, RpcResponseContext},
+    config::{
+        RpcAccountInfoConfig, RpcContextConfig, RpcProgramAccountsConfig, RpcSendTransactionConfig,
+        RpcTransactionConfig,
+    },
+    response::{Response, RpcBlockhash, RpcResponseContext},
+};
+use solana_transaction::{versioned::VersionedTransaction, Transaction};
+use solana_transaction_status_client_types::{
+    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction,
+    EncodedTransactionWithStatusMeta, TransactionBinaryEncoding, TransactionConfirmationStatus,
+    TransactionStatus, UiTransactionEncoding,
 };
 
 #[derive(Clone)]
@@ -55,6 +72,7 @@ impl MockServer {
         let mut module = RoHttpRpcServer::into_rpc(this.clone());
         let _ = module.merge(WebsocketRpcServer::into_rpc(this.clone()));
         let _ = module.merge(TestHttpRpcServer::into_rpc(this.clone()));
+        let _ = module.merge(RwHttpRpcServer::into_rpc(this.clone()));
         let ping = PingConfig::new().ping_interval(Duration::from_secs(10));
 
         let handle = Server::builder()
@@ -268,11 +286,109 @@ impl RoHttpRpcServer for MockServer {
 
     async fn identity(&self) -> RpcResult<RpcIdentity> {
         Ok(RpcIdentity {
-            identity: Pubkey::default().to_string(),
+            identity: SerdePubkey(Pubkey::default()),
+            fqdn: "https://hello.world:4242".to_string(),
         })
+    }
+
+    async fn signature_statuses(
+        &self,
+        signatures: Vec<String>,
+    ) -> RpcResult<Response<Vec<Option<TransactionStatus>>>> {
+        Ok(Response {
+            context: RpcResponseContext::new(0),
+            value: vec![
+                Some(TransactionStatus {
+                    slot: 0,
+                    status: Ok(()),
+                    confirmations: Some(24),
+                    confirmation_status: Some(TransactionConfirmationStatus::Finalized),
+                    err: None
+                });
+                signatures.len()
+            ],
+        })
+    }
+
+    async fn transaction(
+        &self,
+        _signature: String,
+        _params: Option<RpcTransactionConfig>,
+    ) -> RpcResult<Option<Rc<EncodedConfirmedTransactionWithStatusMeta>>> {
+        let txn = EncodedConfirmedTransactionWithStatusMeta {
+            slot: 0,
+            transaction: EncodedTransactionWithStatusMeta {
+                transaction: EncodedTransaction::Binary(
+                    String::new(),
+                    TransactionBinaryEncoding::Base64,
+                ),
+                meta: None,
+                version: None,
+            },
+            block_time: None,
+        };
+        Ok(Some(Rc::new(txn)))
+    }
+
+    async fn routes(&self) -> RpcResult<Vec<RouteInfo>> {
+        let mut routes = Vec::new();
+        self.accounts
+            .scan_async(|_, acc| {
+                if acc.owner != mdp::id() {
+                    return;
+                }
+                let Ok(record) = ErRecord::deserialize(&mut acc.data.as_ref()) else {
+                    return;
+                };
+                routes.push(RouteInfo::from(&record))
+            })
+            .await;
+        Ok(routes)
+    }
+
+    async fn blockhash_for_accounts(&self, _: Vec<SerdePubkey>) -> RpcResult<RpcBlockhash> {
+        let response = RpcBlockhash {
+            blockhash: Hash::new_unique().to_string(),
+            last_valid_block_height: 0,
+        };
+        Ok(response)
     }
 }
 
+#[async_trait]
+impl RwHttpRpcServer for MockServer {
+    async fn send_transaction(
+        &self,
+        txn: String,
+        params: Option<RpcSendTransactionConfig>,
+    ) -> RpcResult<String> {
+        let params = params.unwrap_or_default();
+        let encoding = params.encoding.unwrap_or(UiTransactionEncoding::Base58);
+        let txn = match encoding {
+            UiTransactionEncoding::Base58 | UiTransactionEncoding::Binary => bs58::decode(&txn)
+                .into_vec()
+                .map_err(RouterError::decode_error)?,
+            UiTransactionEncoding::Base64 => base64::prelude::BASE64_STANDARD
+                .decode(txn)
+                .map_err(RouterError::decode_error)?,
+            other => {
+                return Err(ErrorObjectOwned::owned(
+                    1,
+                    format!("{other} transaction encoding is not supported"),
+                    None::<()>,
+                ))
+            }
+        };
+        let txn = if let Ok(txn) = bincode::deserialize::<VersionedTransaction>(&txn) {
+            txn
+        } else {
+            bincode::deserialize::<Transaction>(&txn)
+                .map(VersionedTransaction::from)
+                .map_err(RouterError::decode_error)?
+        };
+        Ok(txn.signatures[0].to_string())
+    }
+}
 #[async_trait]
 impl WebsocketRpcServer for MockServer {
     async fn account_subscribe(
@@ -302,6 +418,9 @@ pub trait TestHttpRpc {
         pubkey: SerdePubkey,
         params: Option<RpcAccountInfoConfig>,
     ) -> SubscriptionResult;
+
+    #[method(name = "getLatestBlockhash")]
+    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>>;
 }
 
 #[async_trait]
@@ -344,6 +463,17 @@ impl TestHttpRpcServer for MockServer {
         let sink = sink.accept().await?;
         let _ = self.program_subscriptions.insert(pubkey.0, sink);
         Ok(())
+    }
+
+    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>> {
+        let value = RpcBlockhash {
+            blockhash: Hash::new_unique().to_string(),
+            last_valid_block_height: 150,
+        };
+        Ok(Response {
+            context: RpcResponseContext::new(0),
+            value,
+        })
     }
 }
 

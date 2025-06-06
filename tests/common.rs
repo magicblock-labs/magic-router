@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use jsonrpsee::server::ServerHandle;
+use jsonrpsee::{http_client::HttpClient, server::ServerHandle};
 use router::config::{RouterConfig, WebsocketConnectionConfig};
 use server::MockServer;
 use solana_pubkey::Pubkey;
@@ -49,6 +49,7 @@ impl TestEnv {
             max_connections: 128,
             max_cached_delegations: 1024,
             max_subscriptions_per_connection: 128,
+            max_cached_transactions: 1024,
             websocket: WebsocketConnectionConfig {
                 ping_interval_sec: 10,
                 connections_per_upstream: 1,
