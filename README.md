@@ -102,6 +102,8 @@ base-chain-urls = ["https://api.devnet.solana.com"]
 
 # Maximum delegation cache entries.
 max-cached-delegations = 1000
+# Maximum number of transaction to route mappings to keep in memory 
+max-cached-transactions = 16384
 
 # Maximum simultaneous connections the router can handle.
 max-connections = 1024
