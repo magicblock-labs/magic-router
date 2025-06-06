@@ -36,13 +36,14 @@ use solana_account::{Account, ReadableAccount, WritableAccount};
 use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
 };
+use solana_hash::Hash;
 use solana_pubkey::Pubkey;
 use solana_rpc_client_api::{
     config::{
         RpcAccountInfoConfig, RpcContextConfig, RpcProgramAccountsConfig, RpcSendTransactionConfig,
         RpcTransactionConfig,
     },
-    response::{Response, RpcResponseContext},
+    response::{Response, RpcBlockhash, RpcResponseContext},
 };
 use solana_transaction::{versioned::VersionedTransaction, Transaction};
 use solana_transaction_status_client_types::{
@@ -344,6 +345,14 @@ impl RoHttpRpcServer for MockServer {
             .await;
         Ok(routes)
     }
+
+    async fn blockhash_for_accounts(&self, _: Vec<SerdePubkey>) -> RpcResult<RpcBlockhash> {
+        let response = RpcBlockhash {
+            blockhash: Hash::new_unique().to_string(),
+            last_valid_block_height: 0,
+        };
+        Ok(response)
+    }
 }
 
 #[async_trait]
@@ -409,6 +418,9 @@ pub trait TestHttpRpc {
         pubkey: SerdePubkey,
         params: Option<RpcAccountInfoConfig>,
     ) -> SubscriptionResult;
+
+    #[method(name = "getLatestBlockhash")]
+    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>>;
 }
 
 #[async_trait]
@@ -451,6 +463,17 @@ impl TestHttpRpcServer for MockServer {
         let sink = sink.accept().await?;
         let _ = self.program_subscriptions.insert(pubkey.0, sink);
         Ok(())
+    }
+
+    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>> {
+        let value = RpcBlockhash {
+            blockhash: Hash::new_unique().to_string(),
+            last_valid_block_height: 150,
+        };
+        Ok(Response {
+            context: RpcResponseContext::new(0),
+            value,
+        })
     }
 }
 

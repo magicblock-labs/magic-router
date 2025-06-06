@@ -247,7 +247,7 @@ async fn test_get_identity() {
     env.add_route(er_identity1).await;
     env.add_route(er_identity2).await;
     // give the router time to sync up with ephemerals
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     let identity = env
         .router_client
@@ -356,7 +356,7 @@ async fn test_get_routes() {
     env.add_route(er_identity1).await;
     env.add_route(er_identity2).await;
     // give the router time to sync up with ephemerals
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     let response = client
         .post(env.router_client.url().parse::<Url>().unwrap())
@@ -381,6 +381,46 @@ async fn test_get_routes() {
             .expect("getRoutes response contains malformed route info");
         assert!(identity == er_identity1.to_string() || identity == er_identity2.to_string())
     }
+}
+
+#[tokio::test]
+async fn test_get_blockhash_for_accounts() {
+    let mut env = TestEnv::init().await;
+    let client = reqwest::Client::new();
+    let er_identity = Pubkey::new_unique();
+
+    let owner = Pubkey::new_unique();
+    let pubkey1 = Pubkey::new_unique();
+    let pubkey2 = Pubkey::new_unique();
+    // spin up a new mock ephemerals
+    env.add_route(er_identity).await;
+    // give the router time to sync up with ephemerals
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // add new account to main chain
+    env.add_account(pubkey1, owner);
+    env.add_account(pubkey2, owner);
+
+    env.delegate_account(pubkey1, er_identity).await;
+    env.delegate_account(pubkey2, er_identity).await;
+
+    let response = client
+        .post(env.router_client.url().parse::<Url>().unwrap())
+        .header(CONTENT_TYPE, "application/json")
+        .body(format!(r#"{{"jsonrpc":"2.0","id":1,"method":"getBlockhashForAccounts","params":[["{pubkey1}","{pubkey2}"]]}}"#))
+        .send()
+        .await
+        .expect("failed to send getBlockhashForAccounts request to the router");
+    let response = response
+        .text()
+        .await
+        .expect("recieved garbage response for getBlockhashForAccounts");
+    let response = json::from_str::<json::Value>(&response);
+    response
+        .get("result")
+        .and_then(|r| r.as_object())
+        .and_then(|r| r.get(&"blockhash"))
+        .and_then(|h| h.as_str())
+        .expect("getBlockhashForAccounts json contains invalid data, no hash was found");
 }
 
 #[ignore = "send_and_confirm_transaction uses blockhash related method which are not supported by the router"]
