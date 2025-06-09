@@ -60,7 +60,7 @@ only makes sense for transactions which were recently sent through the router
    makes sense for transactions which were recently sent through the router
 9. **getRoutes** - a custom method to query all the ER nodes known to the
    router
-9. **getBlockHashForAccounts** - another custom method to query the blockhash
+9. **getBlockhashForAccounts** - another custom method to query the blockhash
    for the provided list of accounts. The list of accounts is usually delegated
    writeable accounts from the transaction that needs to be signed. If the
    accounts are delegated to different ER nodes, the method will return an
