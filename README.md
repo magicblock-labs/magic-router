@@ -67,6 +67,99 @@ only makes sense for transactions which were recently sent through the router
    error. If the accounts are not delegated the returned blockhash is from the
    base chain.
 
+## API Documentation
+
+### getRoutes
+
+Returns information about all Ephemeral Rollup (ER) nodes known to the router.
+
+**Example Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "getRoutes"
+}
+```
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "identity": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+      "fqdn": "er-node-1.magicblock.com",
+      "baseFee": 5000,
+      "blockTimeMs": 400,
+      "countryCode": "US"
+    },
+    {
+      "identity": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+      "fqdn": "er-node-2.magicblock.com",
+      "baseFee": 3000,
+      "blockTimeMs": 350,
+      "countryCode": "EU"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+- `identity` (string): The public key of the ER validator
+- `fqdn` (string): Fully qualified domain name of the ER node
+- `baseFee` (number): Base fee in lamports for transactions on this ER
+- `blockTimeMs` (number): Block time in milliseconds for this ER
+- `countryCode` (string): ISO country code where the ER node is located
+
+### getBlockhashForAccounts
+
+Returns the latest blockhash for a list of accounts. This method is neccessary in order to abstract away the splitting in hte frontend.
+
+**Example Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "getBlockhashForAccounts",
+  "params": [
+    [
+      "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+      "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+    ]
+  ]
+}
+```
+
+```bash
+
+**Example Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "blockhash": "5KKsxSGdJYwBv3rcGZhdJzE3bqJj2vJxP2JxP2JxP2JxP",
+    "lastValidBlockHeight": 123456789
+  }
+}
+```
+
+**Response Fields:**
+- `blockhash` (string): The latest blockhash as a base58-encoded string
+- `lastValidBlockHeight` (number): The block height at which this blockhash expires
+
+**Behavior:**
+- If all accounts are **undelegated**: Returns the blockhash from the base chain
+- If all accounts are **delegated to the same ER**: Returns the blockhash from that ER
+- If accounts are **delegated to different ERs**: Returns an error (conflicting delegations)
+- If **no accounts are provided**: Returns the blockhash from the base chain
+
+**Error Cases:**
+- `ConflictingDelegations`: When accounts are delegated to different ER nodes
+- `UnknownErNode`: When an ER node is not found in the routing table
+
 ## Supported WebSocket Subscriptions
 
 In addition to HTTP requests, the router can dynamically manage WebSocket
