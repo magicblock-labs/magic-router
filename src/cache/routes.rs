@@ -129,10 +129,10 @@ impl RoutingTable {
         let mut fqdn = String::default();
         let mut min_proximity = u64::MAX;
         self.inner.scan(|pubkey, record| {
-            if min_proximity <= record.proximity_ms {
+            if min_proximity <= record.proximity_micros {
                 return;
             }
-            min_proximity = record.proximity_ms;
+            min_proximity = record.proximity_micros;
             node_id = *pubkey;
             fqdn = record.client.url()
         });
@@ -255,8 +255,8 @@ impl RoutingTable {
                         let Some(mut record) = self.inner.get(&pubkey) else {
                             continue;
                         };
-                        record.get_mut().proximity_ms = duration.as_millis() as u64;
-                        tracing::info!("ping to {} took {}ms", record.ip, record.proximity_ms);
+                        record.get_mut().proximity_micros = duration.as_micros() as u64;
+                        tracing::info!("ping to {} took {}ms", record.ip, record.proximity_micros);
                     }
                     _ = ping_ticker.tick() => {
                         self.inner.scan(|&pubkey, record| {
@@ -296,7 +296,7 @@ pub struct UpstreamRecord {
     pub client: Arc<RpcClient>,
     pub ws_url: Arc<Url>,
     pub ip: IpAddr,
-    pub proximity_ms: u64,
+    pub proximity_micros: u64,
     pub info: Option<RouteInfo>,
 }
 
@@ -314,7 +314,7 @@ impl UpstreamRecord {
         Some(UpstreamRecord {
             client,
             ws_url: Arc::new(fqdn),
-            proximity_ms: u64::MAX,
+            proximity_micros: u64::MAX,
             ip,
             info,
         })
