@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 use solana_pubkey::Pubkey;
 use url::Url;
@@ -31,5 +31,14 @@ impl DelegationStatus {
     #[inline(always)]
     pub fn is_delegated(&self) -> bool {
         matches!(self, Self::Delegated(_))
+    }
+}
+
+impl Display for DelegationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Delegated(pk) => write!(f, "DELEGATED TO {pk}"),
+            Self::NotDelegated => write!(f, "NOT DELEGATED"),
+        }
     }
 }

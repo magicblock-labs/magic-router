@@ -3,11 +3,12 @@ use std::{env, fs::read_to_string};
 use router::RouterResult;
 
 use router::config::RouterConfig;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> RouterResult<()> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let config_path = env::args()

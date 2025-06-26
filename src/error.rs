@@ -7,7 +7,7 @@ pub enum RouterError {
     #[error("upstream websocket handshake: {0}")]
     WsHandshake(#[from] WsHandshakeError),
     #[error("solana rpc request error: {0}")]
-    Rpc(#[from] client_error::Error),
+    Rpc(Box<client_error::Error>),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("account has been delegated to unknown ER node: {0}")]
@@ -22,6 +22,12 @@ pub enum RouterError {
 impl From<RouterError> for ErrorObject<'_> {
     fn from(value: RouterError) -> Self {
         ErrorObject::owned::<()>(0, value.to_string(), None)
+    }
+}
+
+impl From<client_error::Error> for RouterError {
+    fn from(value: client_error::Error) -> Self {
+        Self::Rpc(Box::new(value))
     }
 }
 
