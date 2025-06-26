@@ -255,11 +255,14 @@ impl RoHttpRpcServer for HttpServer {
     async fn blockhash_for_accounts(&self, accounts: Vec<SerdePubkey>) -> RpcResult<RpcBlockhash> {
         let mut delegated = None;
         for pk in accounts {
+            println!("checking pk: {:?}", pk.0);
             let DelegationStatus::Delegated(validator) =
                 self.delegations.get_delegation_status(pk.0).await
             else {
                 continue;
             };
+
+            println!("delegated: {:?}", validator);
             let Some(old) = delegated.replace(validator) else {
                 continue;
             };
@@ -341,6 +344,8 @@ impl RwHttpRpcServer for HttpServer {
                 .ok_or_else(|| RouterError::UnknownErNode(identity))?,
             None => self.routes.base_chain().client.clone(),
         };
+        println!("send_transaction: sending transaction to client: {:?}", client.get_identity().await);
+        println!("params: {:?}", params);
         self.transactions
             .track(*txn.get_signature(), client.clone())
             .await;
