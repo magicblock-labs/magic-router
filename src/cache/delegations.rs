@@ -64,45 +64,49 @@ impl DelegationsCache {
 
     pub async fn get_delegation_status(&self, pubkey: Pubkey) -> DelegationStatus {
         let pda = delegation_record_pda(pubkey);
-        if let Some(status) = self.db.read(&pda, |_, v| v.status) {
-            return status;
-        }
-        let mut attempt = 0;
-        let chain = &self.routes.base_chain().client;
-        loop {
-            let response = chain
-                .get_account_with_commitment(&pda, CommitmentConfig::default())
-                .await;
-            let record = match response {
-                Ok(Response { value: Some(a), .. }) => a,
-                Ok(Response { value: None, .. }) => {
-                    let status = DelegationStatus::NotDelegated;
-                    self.insert(pda, pubkey, status).await;
-                    return status;
-                }
-                Err(error) => {
-                    // this indicates an actual error, not found was handled in the previous arm
-                    tracing::error!(%error, "failed to fetch account {pubkey} from chain");
-                    attempt += 1;
-                    if attempt > MAX_ACCOUNT_REFETCH_ATTEMPTS {
-                        return DelegationStatus::NotDelegated;
+        let status = 'status: {
+            if let Some(status) = self.db.read(&pda, |_, v| v.status) {
+                break 'status status;
+            }
+            let mut attempt = 0;
+            let chain = &self.routes.base_chain().client;
+            loop {
+                let response = chain
+                    .get_account_with_commitment(&pda, CommitmentConfig::default())
+                    .await;
+                let record = match response {
+                    Ok(Response { value: Some(a), .. }) => a,
+                    Ok(Response { value: None, .. }) => {
+                        let status = DelegationStatus::NotDelegated;
+                        self.insert(pda, status).await;
+                        break 'status status;
                     }
-                    tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
-                    continue;
-                }
-            };
-            let Some(identity) = extract_delegation_identity(&record.data) else {
-                return DelegationStatus::NotDelegated;
-            };
-            let status = DelegationStatus::Delegated(identity);
+                    Err(error) => {
+                        // this indicates an actual error, not found was handled in the previous arm
+                        tracing::error!(%error, "failed to fetch account {pubkey} from chain");
+                        attempt += 1;
+                        if attempt > MAX_ACCOUNT_REFETCH_ATTEMPTS {
+                            break 'status DelegationStatus::NotDelegated;
+                        }
+                        tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
+                        continue;
+                    }
+                };
+                let Some(identity) = extract_delegation_identity(&record.data) else {
+                    return DelegationStatus::NotDelegated;
+                };
+                let status = DelegationStatus::Delegated(identity);
 
-            self.insert(pda, pubkey, status).await;
+                self.insert(pda, status).await;
 
-            break status;
-        }
+                break 'status status;
+            }
+        };
+        tracing::debug!("account's delegation status has been resolved to {status}");
+        status
     }
 
-    async fn insert(&self, pda: Pubkey, account: Pubkey, status: DelegationStatus) {
+    async fn insert(&self, pda: Pubkey, status: DelegationStatus) {
         let request_id = RequestId::generate();
         let params = RpcAccountInfoConfig {
             commitment: CommitmentConfig::confirmed().into(),
@@ -124,8 +128,8 @@ impl DelegationsCache {
         };
         let _ = self.dispatcher_tx.send(subscription).await;
 
-        let _ = self.subscriptions.insert(request_id, account);
-        match self.db.entry(account) {
+        let _ = self.subscriptions.insert(request_id, pda);
+        match self.db.entry(pda) {
             Entry::Vacant(e) => {
                 if let (Some(evicted), _) = e.put_entry(entry) {
                     let unsub = SubscriptionAction::Unsubscribe(Unsubscription {
@@ -187,7 +191,9 @@ impl DelegationsCache {
                             subscriptions.remove(&id);
                             continue;
                         };
-                        sts.get_mut().status = status;
+                        let sts = sts.get_mut();
+                        tracing::debug!("account {pubkey} has changed its delegation status from {} to {status}", sts.status);
+                        sts.status = status;
                     }
                     PubsubMessage::Disconnected(id) => {
                         let Some((_, pubkey)) = subscriptions.remove(&id) else {
