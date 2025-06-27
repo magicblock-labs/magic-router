@@ -3,7 +3,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 use scc::{hash_cache::Entry, HashCache, HashMap};
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
-use solana_rpc_client_api::response::Response;
+use solana_rpc_client_api::{config::RpcAccountInfoConfig, response::Response};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
@@ -64,8 +64,8 @@ impl DelegationsCache {
 
     pub async fn get_delegation_status(&self, pubkey: Pubkey) -> DelegationStatus {
         let pda = delegation_record_pda(pubkey);
-        if let Some(entry) = self.db.get(&pda) {
-            return entry.get().status;
+        if let Some(status) = self.db.read(&pda, |_, v| v.status) {
+            return status;
         }
         let mut attempt = 0;
         let chain = &self.routes.base_chain().client;
@@ -77,7 +77,7 @@ impl DelegationsCache {
                 Ok(Response { value: Some(a), .. }) => a,
                 Ok(Response { value: None, .. }) => {
                     let status = DelegationStatus::NotDelegated;
-                    self.insert(pda, status).await;
+                    self.insert(pda, pubkey, status).await;
                     return status;
                 }
                 Err(error) => {
@@ -96,15 +96,19 @@ impl DelegationsCache {
             };
             let status = DelegationStatus::Delegated(identity);
 
-            self.insert(pda, status).await;
+            self.insert(pda, pubkey, status).await;
 
             break status;
         }
     }
 
-    async fn insert(&self, pubkey: Pubkey, status: DelegationStatus) {
+    async fn insert(&self, pda: Pubkey, account: Pubkey, status: DelegationStatus) {
         let request_id = RequestId::generate();
-        let payload = account_subscription_json(request_id, pubkey, None);
+        let params = RpcAccountInfoConfig {
+            commitment: CommitmentConfig::confirmed().into(),
+            ..Default::default()
+        };
+        let payload = account_subscription_json(request_id, pda, Some(params));
         let destination = self.routes.base_chain().ws_url.clone();
         let subscription = SubscriptionAction::Subscribe(Subscription {
             request_id,
@@ -120,8 +124,8 @@ impl DelegationsCache {
         };
         let _ = self.dispatcher_tx.send(subscription).await;
 
-        let _ = self.subscriptions.insert(request_id, pubkey);
-        match self.db.entry(pubkey) {
+        let _ = self.subscriptions.insert(request_id, account);
+        match self.db.entry(account) {
             Entry::Vacant(e) => {
                 if let (Some(evicted), _) = e.put_entry(entry) {
                     let unsub = SubscriptionAction::Unsubscribe(Unsubscription {
