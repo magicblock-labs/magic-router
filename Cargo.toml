@@ -71,6 +71,10 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 # misc
 thiserror = "2.0"
 
+# middleware for CORS support
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+
 [dev-dependencies]
 solana-pubsub-client = { version = "2.2" }
 solana-system-transaction = { version = "2.2" }

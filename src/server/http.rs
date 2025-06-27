@@ -260,6 +260,7 @@ impl RoHttpRpcServer for HttpServer {
             else {
                 continue;
             };
+
             let Some(old) = delegated.replace(validator) else {
                 continue;
             };
