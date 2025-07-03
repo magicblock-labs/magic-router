@@ -11,10 +11,9 @@ use crate::{
         DelegationEntry, DelegationStatus, DELEGATION_PROGRAM, DELEGATION_RECORD_DATA_SIZE,
     },
     pubsub::{
-        notification::{deserialize_account, PubsubMessage},
-        subscription::{
-            account_subscription_json, Subscription, SubscriptionAction, Unsubscription,
-        },
+        notification::{deserialize_account, PubsubMessage, SubscriptionHandle},
+        subscription::{account_subscription_json, Subscription, Unsubscription},
+        PubSubUpstreamKind,
     },
     types::{RequestId, SubscriberId, UniqueId},
 };
@@ -34,16 +33,21 @@ pub struct DelegationsCache {
     /// Cache of delegation states
     db: DelegationsDB,
     /// Channel endpoint to wesocket subscriptions dispatcher
-    dispatcher_tx: Sender<SubscriptionAction>,
+    dispatcher_tx: Sender<Subscription>,
     /// Routes manager, mapping ER identity to FQDNs
     routes: Arc<RoutingTable>,
     /// List of active subscriptions to delegation states of given accounts
-    subscriptions: Arc<HashMap<RequestId, Pubkey>>,
+    subscriptions: Arc<HashMap<RequestId, SubMeta>>,
+}
+
+struct SubMeta {
+    account: Pubkey,
+    handle: Option<SubscriptionHandle>,
 }
 
 impl DelegationsCache {
     pub fn new(
-        dispatcher_tx: Sender<SubscriptionAction>,
+        dispatcher_tx: Sender<Subscription>,
         routes: Arc<RoutingTable>,
         max_cached_delegations: usize,
     ) -> Arc<Self> {
@@ -64,84 +68,106 @@ impl DelegationsCache {
 
     pub async fn get_delegation_status(&self, pubkey: Pubkey) -> DelegationStatus {
         let pda = delegation_record_pda(pubkey);
-        if let Some(status) = self.db.read(&pda, |_, v| v.status) {
-            return status;
-        }
-        let mut attempt = 0;
-        let chain = &self.routes.base_chain().client;
-        loop {
-            let response = chain
-                .get_account_with_commitment(&pda, CommitmentConfig::default())
-                .await;
-            let record = match response {
-                Ok(Response { value: Some(a), .. }) => a,
-                Ok(Response { value: None, .. }) => {
-                    let status = DelegationStatus::NotDelegated;
-                    self.insert(pda, pubkey, status).await;
-                    return status;
-                }
-                Err(error) => {
-                    // this indicates an actual error, not found was handled in the previous arm
-                    tracing::error!(%error, "failed to fetch account {pubkey} from chain");
-                    attempt += 1;
-                    if attempt > MAX_ACCOUNT_REFETCH_ATTEMPTS {
-                        return DelegationStatus::NotDelegated;
+        let status = 'status: {
+            if let Some(status) = self.db.read(&pda, |_, v| v.status) {
+                break 'status status;
+            }
+            let mut attempt = 0;
+            let chain = &self.routes.base_chain().client;
+            loop {
+                let response = chain
+                    .get_account_with_commitment(&pda, CommitmentConfig::confirmed())
+                    .await;
+                let record = match response {
+                    Ok(Response { value: Some(a), .. }) => a,
+                    Ok(Response { value: None, .. }) => {
+                        let status = DelegationStatus::NotDelegated;
+                        self.insert(pda, status).await;
+                        break 'status status;
                     }
-                    tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
-                    continue;
-                }
-            };
-            let Some(identity) = extract_delegation_identity(&record.data) else {
-                return DelegationStatus::NotDelegated;
-            };
-            let status = DelegationStatus::Delegated(identity);
+                    Err(error) => {
+                        // this indicates an actual error, not found was handled in the previous arm
+                        tracing::error!(%error, "failed to fetch account {pubkey} from chain");
+                        attempt += 1;
+                        if attempt > MAX_ACCOUNT_REFETCH_ATTEMPTS {
+                            break 'status DelegationStatus::NotDelegated;
+                        }
+                        tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
+                        continue;
+                    }
+                };
 
-            self.insert(pda, pubkey, status).await;
+                let Some(identity) = extract_delegation_identity(&record.data) else {
+                    let status = DelegationStatus::NotDelegated;
+                    self.insert(pda, status).await;
+                    break 'status status;
+                };
+                let status = DelegationStatus::Delegated(identity);
 
-            break status;
-        }
+                self.insert(pda, status).await;
+
+                break 'status status;
+            }
+        };
+        tracing::debug!("account {pubkey} delegation status has been resolved to {status}");
+        status
     }
 
-    async fn insert(&self, pda: Pubkey, account: Pubkey, status: DelegationStatus) {
+    async fn insert(&self, pda: Pubkey, status: DelegationStatus) {
         let request_id = RequestId::generate();
         let params = RpcAccountInfoConfig {
             commitment: CommitmentConfig::confirmed().into(),
             ..Default::default()
         };
-        let payload = account_subscription_json(request_id, pda, Some(params));
         let destination = self.routes.base_chain().ws_url.clone();
-        let subscription = SubscriptionAction::Subscribe(Subscription {
+        let entry = DelegationEntry {
+            status,
+            request_id,
+            destination: destination.clone(),
+        };
+        match self.db.entry(pda) {
+            Entry::Vacant(e) => {
+                if let (Some(evicted), _) = e.put_entry(entry) {
+                    let unsub = Unsubscription {
+                        subscriber_id: self.subscriber_id,
+                        request_id: evicted.1.request_id,
+                        method: "accountUnsubscribe",
+                    };
+                    let Some((_, meta)) = self.subscriptions.remove(&evicted.1.request_id) else {
+                        return;
+                    };
+                    let Some(tx) = meta.handle.map(|h| h.unsub) else {
+                        return;
+                    };
+                    let _ = tx.send(unsub).await;
+                };
+            }
+            Entry::Occupied(mut e) => {
+                e.put(entry);
+                return;
+            }
+        }
+        let payload = account_subscription_json(request_id, pda, Some(params));
+        let subscription = Subscription {
             request_id,
             subscriber_id: self.subscriber_id,
             payload: payload.clone(),
             tx: self.pubsub_tx.clone(),
             destination: destination.clone(),
-        });
-        let entry = DelegationEntry {
-            status,
-            request_id,
-            destination,
+            upstream: PubSubUpstreamKind::Chain,
         };
         let _ = self.dispatcher_tx.send(subscription).await;
+        tracing::debug!(
+            id = request_id.0,
+            %pda,
+            "cache coherence subscription sent for the account"
+        );
 
-        let _ = self.subscriptions.insert(request_id, account);
-        match self.db.entry(account) {
-            Entry::Vacant(e) => {
-                if let (Some(evicted), _) = e.put_entry(entry) {
-                    let unsub = SubscriptionAction::Unsubscribe(Unsubscription {
-                        subscriber_id: self.subscriber_id,
-                        request_id: evicted.1.request_id,
-                        destination: evicted.1.destination,
-                        method: "accountUnsubscribe",
-                    });
-                    self.subscriptions.remove(&evicted.1.request_id);
-                    let _ = self.dispatcher_tx.send(unsub).await;
-                }
-            }
-            Entry::Occupied(mut e) => {
-                e.put(entry);
-            }
-        }
+        let meta = SubMeta {
+            account: pda,
+            handle: None,
+        };
+        let _ = self.subscriptions.insert(request_id, meta);
     }
 
     fn updater(&self, mut rx: Receiver<PubsubMessage>) -> impl Future<Output = ()> {
@@ -150,13 +176,18 @@ impl DelegationsCache {
         async move {
             while let Some(msg) = rx.recv().await {
                 match msg {
-                    PubsubMessage::Subscribed(id) => {
+                    PubsubMessage::Subscribed(handle) => {
+                        let Some(mut meta) = subscriptions.get(&handle.request_id) else {
+                            continue;
+                        };
                         tracing::debug!(
-                            id = id.0,
+                            id = handle.request_id.0,
+                            pubkey = %meta.account,
                             "delegations cache coherence subscription confirmed"
                         );
+                        meta.handle.replace(handle);
                     }
-                    PubsubMessage::Notification { id, payload } => {
+                    PubsubMessage::Notification { id, payload, .. } => {
                         let account = deserialize_account(&payload, &["value"]);
 
                         let Some(account) = account else {
@@ -166,6 +197,13 @@ impl DelegationsCache {
                             );
                             continue;
                         };
+                        let status = if account.lamports == 0 {
+                            DelegationStatus::NotDelegated
+                        } else {
+                            extract_delegation_identity(&account.data)
+                                .map(DelegationStatus::Delegated)
+                                .unwrap_or(DelegationStatus::NotDelegated)
+                        };
                         let Some(entry) = subscriptions.get(&id) else {
                             tracing::warn!(
                                 id = id.0,
@@ -174,27 +212,22 @@ impl DelegationsCache {
                             );
                             continue;
                         };
-                        let pubkey = entry.get();
-                        let status = if account.lamports == 0 {
-                            DelegationStatus::NotDelegated
-                        } else {
-                            extract_delegation_identity(&account.data)
-                                .map(DelegationStatus::Delegated)
-                                .unwrap_or(DelegationStatus::NotDelegated)
-                        };
-                        let Some(mut sts) = db.get(pubkey) else {
+                        let pubkey = entry.get().account;
+                        let Some(mut sts) = db.get(&pubkey) else {
                             tracing::warn!("received subscription for unknown pubkey");
                             subscriptions.remove(&id);
                             continue;
                         };
-                        sts.get_mut().status = status;
+                        let sts = sts.get_mut();
+                        tracing::debug!("account {pubkey} has changed its delegation status from {} to {status}", sts.status);
+                        sts.status = status;
                     }
                     PubsubMessage::Disconnected(id) => {
-                        let Some((_, pubkey)) = subscriptions.remove(&id) else {
+                        let Some((_, meta)) = subscriptions.remove(&id) else {
                             tracing::warn!(id = id.0, "unknown subscription was terminated");
                             continue;
                         };
-                        db.remove(&pubkey);
+                        db.remove(&meta.account);
                     }
                 }
             }

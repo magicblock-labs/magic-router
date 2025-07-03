@@ -11,7 +11,7 @@ pub type SubscriptionId = u64;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SubscriberId(pub u64);
-#[derive(Debug, Hash, PartialEq, Eq, Deserialize, Serialize, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, Eq, Deserialize, Serialize, Clone, Copy, Default)]
 pub struct RequestId(pub u64);
 
 macro_rules! impl_unique_id {
@@ -27,7 +27,7 @@ macro_rules! impl_unique_id {
 
 pub trait UniqueId: Sized + From<u64> {
     fn generate() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
         let inner = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self::from(inner)
     }
