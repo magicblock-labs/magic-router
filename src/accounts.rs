@@ -1,7 +1,6 @@
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
 use solana_pubkey::Pubkey;
-use url::Url;
 
 use crate::types::RequestId;
 pub const DELEGATION_PROGRAM_STR: &str = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
@@ -15,8 +14,6 @@ pub struct DelegationEntry {
     /// Unique request ID associated with websocket subscription,
     /// which keeps track of any delegation status change
     pub request_id: RequestId,
-    /// FQDN of the upstream where subscription request has been sent
-    pub destination: Arc<Url>,
     /// Delegation status of the account
     pub status: DelegationStatus,
 }
