@@ -96,8 +96,11 @@ impl DelegationsCache {
                         continue;
                     }
                 };
+
                 let Some(identity) = extract_delegation_identity(&record.data) else {
-                    return DelegationStatus::NotDelegated;
+                    let status = DelegationStatus::NotDelegated;
+                    self.insert(pda, status).await;
+                    break 'status status;
                 };
                 let status = DelegationStatus::Delegated(identity);
 
@@ -106,7 +109,7 @@ impl DelegationsCache {
                 break 'status status;
             }
         };
-        tracing::debug!("account's delegation status has been resolved to {status}");
+        tracing::debug!("account {pubkey} delegation status has been resolved to {status}");
         status
     }
 
