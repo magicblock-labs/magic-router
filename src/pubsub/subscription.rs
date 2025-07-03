@@ -5,16 +5,9 @@ use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcProgramAccountsConf
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
-use crate::types::{RequestId, SerdePubkey, SubscriberId};
+use crate::types::{RequestId, SerdePubkey, SubscriberId, UniqueId};
 
-use super::notification::PubsubMessage;
-
-/// Possible subscription actions
-#[derive(Clone, Debug)]
-pub enum SubscriptionAction {
-    Subscribe(Subscription),
-    Unsubscribe(Unsubscription),
-}
+use super::{notification::PubsubMessage, PubSubUpstreamKind};
 
 #[derive(Clone, Debug)]
 pub struct Subscription {
@@ -28,22 +21,16 @@ pub struct Subscription {
     pub tx: Sender<PubsubMessage>,
     /// URL of the upstream where to forward the subscription request
     pub destination: Arc<Url>,
+    /// The kind of upstream where subscription is sent
+    pub upstream: PubSubUpstreamKind,
 }
 
 impl Subscription {
     pub fn clone_with_destination(&self, url: Arc<Url>) -> Self {
         let mut clone = self.clone();
         clone.destination = url;
+        clone.request_id = RequestId::generate();
         clone
-    }
-
-    pub fn to_unsubsciption(&self, method: &'static str) -> SubscriptionAction {
-        SubscriptionAction::Unsubscribe(Unsubscription {
-            subscriber_id: self.subscriber_id,
-            request_id: self.request_id,
-            destination: self.destination.clone(),
-            method,
-        })
     }
 }
 
@@ -55,17 +42,6 @@ pub struct Unsubscription {
     pub request_id: RequestId,
     /// name of unsubscription request (e.g. accountUnsubscribe)
     pub method: &'static str,
-    /// URL of the upstream where to forward the unsubscription request
-    pub destination: Arc<Url>,
-}
-
-impl SubscriptionAction {
-    pub fn destination(&self) -> &Url {
-        match self {
-            Self::Subscribe(s) => &s.destination,
-            Self::Unsubscribe(u) => &u.destination,
-        }
-    }
 }
 
 #[inline(always)]

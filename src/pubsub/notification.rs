@@ -4,8 +4,11 @@ use json::JsonValueTrait;
 use serde::Deserialize;
 use solana_account::Account;
 use solana_account_decoder::UiAccount;
+use tokio::sync::mpsc::Sender;
 
 use crate::types::{RequestId, SubscriptionId};
+
+use super::{subscription::Unsubscription, PubSubUpstreamKind};
 
 /// Represents a WebSocket message received from the Solana blockchain.
 /// can be either a result of subscription with ID or an actual state update
@@ -23,10 +26,11 @@ pub enum WebsocketMessage {
 /// (entities listening for notifications)
 pub enum PubsubMessage {
     /// Successful subscription to given request
-    Subscribed(RequestId),
+    Subscribed(SubscriptionHandle),
     /// WebSocket notification received by connection
     Notification {
         id: RequestId,
+        upstream: PubSubUpstreamKind,
         payload: Arc<json::Value>,
     },
     /// A notification indicating that connection is down, and all subscribers
@@ -72,6 +76,16 @@ pub struct SubscriptionResult {
     pub id: RequestId,
     /// resultant subscription ID
     pub result: SubscriptionId,
+}
+
+/// Represents a subscription handle to work with the confirmed subscription.
+pub struct SubscriptionHandle {
+    /// Request ID used for the subscription
+    pub request_id: RequestId,
+    /// Channel endpoint for sending unsubscription request
+    pub unsub: Sender<Unsubscription>,
+    /// The kind of upstream where subscription is sent
+    pub upstream: PubSubUpstreamKind,
 }
 
 /// Represents an unsubscription result message.

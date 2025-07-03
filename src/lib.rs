@@ -37,8 +37,7 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         .max_connections(config.max_connections)
         .max_subscriptions_per_connection(config.max_subscriptions_per_connection)
         .set_http_middleware(
-            tower::ServiceBuilder::new()
-                .layer(tower_http::cors::CorsLayer::permissive())
+            tower::ServiceBuilder::new().layer(tower_http::cors::CorsLayer::permissive()),
         )
         .build(config.listen_address)
         .await?;
