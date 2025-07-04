@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::{pubsub::connection::WebsocketConnection, RouterResult};
 
-use super::subscription::SubscriptionAction;
+use super::subscription::Subscription;
 
 /// A websocket subscription routing hub. It manages all of the upstream connections
 /// and properly directs subscription requests to provided URLs
@@ -15,10 +15,10 @@ pub struct SubscriptionDispatcher {
     /// upstreams, like url change or going offline
     upstream_state_rx: Receiver<WsUpstreamState>,
     /// Channel endpoint for subscription/unsubscription requests
-    requests_rx: Receiver<SubscriptionAction>,
+    requests_rx: Receiver<Subscription>,
     /// A map between upstreams (identified by their URL) and
     /// channel for communicating with them
-    upstreams: HashMap<Arc<Url>, Sender<SubscriptionAction>>,
+    upstreams: HashMap<Arc<Url>, Sender<Subscription>>,
     /// Number of websocket connections to spawn for each websocket upstream
     connections_per_upstream: u16,
     /// Connection ID counter
@@ -34,7 +34,7 @@ pub struct WsUpstreamState {
 impl SubscriptionDispatcher {
     pub fn new(
         upstream_state_rx: Receiver<WsUpstreamState>,
-        requests_rx: Receiver<SubscriptionAction>,
+        requests_rx: Receiver<Subscription>,
         connections_per_upstream: u16,
     ) -> Self {
         Self {
@@ -78,13 +78,13 @@ impl SubscriptionDispatcher {
                     }
                 }
                 Some(request) = self.requests_rx.recv() => {
-                    let Some(tx) = self.upstreams.get_mut(request.destination()) else {
-                        tracing::warn!(url=%request.destination(), "subscription request was sent for unknown upstream");
+                    let Some(tx) = self.upstreams.get_mut(&request.destination) else {
+                        tracing::warn!(url=%request.destination, "subscription request was sent for unknown upstream");
                         continue;
                     };
                     if let Err(SendError(r)) = tx.send(request) {
-                        tracing::warn!(url=%r.destination(), "all connections to the upstream have been terminated");
-                        self.upstreams.remove(r.destination());
+                        tracing::warn!(url=%r.destination, "all connections to the upstream have been terminated");
+                        self.upstreams.remove(&r.destination);
                     }
                 }
                 else => {

@@ -260,6 +260,7 @@ impl RoHttpRpcServer for HttpServer {
             else {
                 continue;
             };
+
             let Some(old) = delegated.replace(validator) else {
                 continue;
             };
@@ -317,7 +318,7 @@ impl RwHttpRpcServer for HttpServer {
                 .map(VersionedTransaction::from)
                 .map_err(RouterError::decode_error)?
         };
-        let mut delegated = None;
+        let mut delegation = DelegationStatus::NotDelegated;
         for (i, pk) in txn.message.static_account_keys().iter().enumerate() {
             if !txn.message.is_maybe_writable(i, None) {
                 continue;
@@ -327,19 +328,22 @@ impl RwHttpRpcServer for HttpServer {
             else {
                 continue;
             };
-            let Some(old) = delegated.replace(validator) else {
+            let replaced =
+                std::mem::replace(&mut delegation, DelegationStatus::Delegated(validator));
+            let DelegationStatus::Delegated(old) = replaced else {
                 continue;
             };
             if old != validator {
                 Err(RouterError::ConflictingDelegations)?;
             }
         }
-        let client = match delegated {
-            Some(identity) => self
+        tracing::debug!(%delegation, "delegation status of transaction accounts");
+        let client = match delegation {
+            DelegationStatus::Delegated(identity) => self
                 .routes
                 .ephemeral_client(&identity)
                 .ok_or_else(|| RouterError::UnknownErNode(identity))?,
-            None => self.routes.base_chain().client.clone(),
+            DelegationStatus::NotDelegated => self.routes.base_chain().client.clone(),
         };
         self.transactions
             .track(*txn.get_signature(), client.clone())

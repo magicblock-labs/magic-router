@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{collections::HashMap, pin::Pin};
 
 use flume::Receiver as StealingReceiver;
 use jsonrpsee::client_transport::ws::{
@@ -8,14 +8,16 @@ use jsonrpsee::client_transport::ws::{
 };
 use jsonrpsee::core::client::{ReceivedMessage, TransportReceiverT, TransportSenderT};
 use tokio::sync::mpsc::Sender as TokioSender;
+use tokio::sync::mpsc::{self, Receiver as TokioReceiver};
 use tokio_util::compat::Compat;
 use url::Url;
 
-use crate::pubsub::notification::{Notification, WebsocketMessage};
+use crate::pubsub::notification::{Notification, SubscriptionHandle, WebsocketMessage};
 use crate::types::{RequestId, SubscriberId, SubscriptionId, UniqueId};
 
 use super::notification::PubsubMessage;
-use super::subscription::{Subscription, SubscriptionAction};
+use super::subscription::{Subscription, Unsubscription};
+use super::PubSubUpstreamKind;
 
 type SubscriptionsDB = HashMap<SubscriptionId, HashMap<SubscriberId, SubscriberHandle>>;
 
@@ -26,7 +28,7 @@ pub struct WebsocketConnection {
     /// Write endpoint for underlying websocket stream
     sender: Sender<Compat<EitherStream>>,
     /// Read endpoint for underlying websocket stream
-    receiver: Receiver<Compat<EitherStream>>,
+    receiver: TokioReceiver<ReceivedMessage>,
     /// All active subscriptions on this websocket connection
     subscriptions: SubscriptionsDB,
     /// Subscriptions which haven't yet been confirmed and assinged an ID
@@ -34,8 +36,12 @@ pub struct WebsocketConnection {
     /// Mapping between internal request id (used by various actor components) and subscription
     /// id assigned by the upstream. This map is used for unsubscribe requests
     request_to_subs: HashMap<RequestId, SubscriptionId>,
-    /// Channel endpoint for subscription/unsubscription requests
-    requests_rx: StealingReceiver<SubscriptionAction>,
+    /// Channel endpoint for subscription requests
+    requests_rx: StealingReceiver<Subscription>,
+    /// Dedicated receiving channel endpoint for unsubscription requests
+    unsubscriptions_rx: TokioReceiver<Unsubscription>,
+    /// Dedicated sending channel endpoint for unsubscription requests
+    unsubscriptions_tx: TokioSender<Unsubscription>,
     /// Url of this websocket connection
     url: Arc<Url>,
 }
@@ -44,52 +50,33 @@ impl WebsocketConnection {
     pub async fn new(
         id: u32,
         url: Arc<Url>,
-        requests_rx: StealingReceiver<SubscriptionAction>,
+        requests_rx: StealingReceiver<Subscription>,
     ) -> Result<Self, WsHandshakeError> {
         let (sender, receiver) = WsTransportClientBuilder::default()
             .build(Url::clone(&url))
             .await?;
-
+        let (tx, rx) = mpsc::channel(1024);
+        let (unsubscriptions_tx, unsubscriptions_rx) = mpsc::channel(1024);
+        tokio::spawn(receive(id, receiver, tx));
         Ok(Self {
             id,
             sender,
-            receiver,
+            receiver: rx,
             subscriptions: HashMap::new(),
             inflights: HashMap::new(),
             request_to_subs: HashMap::new(),
             requests_rx,
             url,
+            unsubscriptions_rx,
+            unsubscriptions_tx,
         })
     }
 
     pub async fn run(mut self) {
-        // we keep the future around, as it's not cancel safe and dropping
-        // it in select! causes partial reads and all of the ensuing chaos
-        let mut future = self.receiver.receive();
-        let mut receiving = unsafe { Pin::new_unchecked(&mut future) };
-        tracing::info!(url=%self.url, "started websocket new connection");
-        macro_rules! reset_receiving_future {
-            () => {
-                drop(future);
-                future = self.receiver.receive();
-                receiving = unsafe { Pin::new_unchecked(&mut future) };
-            };
-            (reestablish) => {
-                drop(future);
-                if !self.reestablish().await {
-                    tracing::warn!("failed to reconnect to websocket, terminating");
-                    break;
-                }
-                future = self.receiver.receive();
-                receiving = unsafe { Pin::new_unchecked(&mut future) };
-            };
-        }
-
+        let mut ping = tokio::time::interval(Duration::from_secs(10));
         loop {
             tokio::select! {
-                Ok(data) = &mut receiving => {
-                    reset_receiving_future!();
-
+                Some(data) = self.receiver.recv() => {
                     let result = match data {
                         ReceivedMessage::Text(text) => {
                             WebsocketMessage::deserialize(text.as_bytes())
@@ -118,7 +105,11 @@ impl WebsocketConnection {
 
                             let mut to_remove = Vec::new();
                             for (id, sh) in &mut *listeners {
-                                let msg = PubsubMessage::Notification { id: sh.request_id, payload: notification.clone() };
+                                let msg = PubsubMessage::Notification {
+                                    id: sh.request_id,
+                                    payload: notification.clone(),
+                                    upstream: sh.upstream
+                                };
                                 if sh.tx.send(msg).await.is_err() {
                                     tracing::warn!(id=id.0, "subscriber has unxpectedly closed the channel");
                                     to_remove.push(*id);
@@ -138,11 +129,16 @@ impl WebsocketConnection {
                             };
                             self.request_to_subs.insert(s.id, s.result);
                             let tx = sub.tx;
-                            if tx.send(PubsubMessage::Subscribed(s.id)).await.is_err() {
+                            let handle = SubscriptionHandle {
+                                request_id: s.id,
+                                unsub: self.unsubscriptions_tx.clone(),
+                                upstream: sub.upstream
+                            };
+                            if tx.send(PubsubMessage::Subscribed(handle)).await.is_err() {
                                 tracing::warn!(id=?sub.subscriber_id, "subscriber stopped listening for subscription");
                                 continue;
                             }
-                            let handle = SubscriberHandle { tx, request_id: sub.request_id };
+                            let handle = SubscriberHandle { tx, request_id: sub.request_id, upstream: sub.upstream };
                             self.subscriptions.entry(s.result).or_default().insert(sub.subscriber_id, handle);
                         }
                         WebsocketMessage::Unsubscribed(u) => {
@@ -150,47 +146,60 @@ impl WebsocketConnection {
                         }
                     }
                 }
-                Ok(action) = self.requests_rx.recv_async() => {
-                    match action {
-                        SubscriptionAction::Subscribe(s) => {
-                            let payload = s.payload.to_string();
-                            self.inflights.insert(s.request_id, s);
-                            if let Err(error) = self.sender.send(payload).await {
-                                tracing::error!(url=%self.url, %error, "failed to send subscription request to websocket");
-                                reset_receiving_future!(reestablish);
-                            }
-                        }
-                        SubscriptionAction::Unsubscribe(u) => {
-                            let Some(subid) = self.request_to_subs.get(&u.request_id) else {
-                                tracing::warn!(url=%self.url, "tried to unsubscribe from non-existent subscription");
-                                continue;
-                            };
-                            let id = RequestId::generate();
-                            let Some(subscribers) = self.subscriptions.get_mut(subid) else {
-                                tracing::warn!(url=%self.url, "tried to unsubscribe from non-existent subscription");
-                                continue;
-                            };
-                            subscribers.remove(&u.subscriber_id);
-                            if subscribers.is_empty() {
-                                self.subscriptions.remove(subid);
-                            }
-                            let unsubscription = format!(
-                                r#"{{ "jsonrpc": "2.0", "id": {}, "method": "{}", "params": [ {} ] }}"#,
-                                id.0, u.method, subid
-                            );
-                            if let Err(error) = self.sender.send(unsubscription).await {
-                                tracing::error!(url=%self.url, %error, "failed to send unsubscription request to websocket");
-                                reset_receiving_future!(reestablish);
-                            }
-                        }
+                Some(u) = self.unsubscriptions_rx.recv() => {
+                    let Some(subid) = self.request_to_subs.get(&u.request_id) else {
+                        tracing::warn!(url=%self.url, "tried to unsubscribe from non-existent subscription");
+                        continue;
+                    };
+                    let id = RequestId::generate();
+                    let Some(subscribers) = self.subscriptions.get_mut(subid) else {
+                        tracing::warn!(url=%self.url, "tried to unsubscribe from non-existent subscription");
+                        continue;
+                    };
+                    subscribers.remove(&u.subscriber_id);
+                    if subscribers.is_empty() {
+                        self.subscriptions.remove(subid);
                     }
+                    let unsubscription = format!(
+                        r#"{{ "jsonrpc": "2.0", "id": {}, "method": "{}", "params": [ {} ] }}"#,
+                        id.0, u.method, subid
+                    );
+                    if let Err(error) = self.sender.send(unsubscription).await {
+                        tracing::error!(url=%self.url, %error, "failed to send unsubscription request to websocket");
+                        if !self.reestablish().await {
+                            break;
+                        };
+                    }
+
+                }
+                Ok(s) = self.requests_rx.recv_async() => {
+                    let payload = s.payload.to_string();
+                    self.inflights.insert(s.request_id, s);
+                    if let Err(error) = self.sender.send(payload).await {
+                        tracing::error!(url=%self.url, %error, "failed to send subscription request to websocket");
+                        if !self.reestablish().await {
+                            break;
+                        };
+                    }
+                }
+                _ = ping.tick() => {
+                    if let Err(error) = self.sender.send_ping().await {
+                        tracing::error!(url=%self.url, %error, id = self.id, "failed to ping the connection");
+                    } else {
+                        continue;
+                    }
+                    if !self.reestablish().await {
+                        break;
+                    };
                 }
                 else => {
                     if self.requests_rx.is_disconnected() {
                         tracing::info!(id=self.id, url=%self.url, "server is shutting down, terminating websocket connection");
                         break;
                     }
-                    reset_receiving_future!(reestablish);
+                    if !self.reestablish().await {
+                        break;
+                    };
                 }
             }
         }
@@ -230,12 +239,42 @@ impl WebsocketConnection {
             }
         };
         self.sender = sender;
-        self.receiver = receiver;
+        let (tx, rx) = mpsc::channel(1024);
+        tokio::spawn(receive(self.id, receiver, tx));
+        self.receiver = rx;
+        tracing::info!(
+            id=self.id, url=%self.url,
+            "connection has been reestablished"
+        );
         true
+    }
+}
+
+async fn receive(
+    id: u32,
+    mut receiver: Receiver<Compat<EitherStream>>,
+    tx: TokioSender<ReceivedMessage>,
+) {
+    loop {
+        match receiver.receive().await {
+            Ok(m) => {
+                if tx.send(m).await.is_err() {
+                    tracing::info!(
+                        "message receiver for ws connection {id} has been closed, terminating"
+                    );
+                    break;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("ws connection {id} has been closed: {e}");
+                break;
+            }
+        }
     }
 }
 
 struct SubscriberHandle {
     request_id: RequestId,
+    upstream: PubSubUpstreamKind,
     tx: TokioSender<PubsubMessage>,
 }

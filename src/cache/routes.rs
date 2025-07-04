@@ -25,7 +25,8 @@ use crate::{
     pubsub::{
         dispatch::WsUpstreamState,
         notification::{deserialize_account, deserialize_field, PubsubMessage},
-        subscription::{program_subscription_json, Subscription, SubscriptionAction},
+        subscription::{program_subscription_json, Subscription},
+        PubSubUpstreamKind,
     },
     types::{RequestId, RouteInfo, SerdePubkey, SubscriberId, UniqueId},
     RouterResult,
@@ -40,7 +41,7 @@ pub struct RoutingTable {
     /// List of connection handles to base layer chain endpoints
     base_chain: BaseChainUpstreams,
     /// Channel endpoint to websocket subscriptions dispatcher
-    dispatcher_tx: Sender<SubscriptionAction>,
+    dispatcher_tx: Sender<Subscription>,
     /// Channel endpoint to send websocket updates on routes back to routes manager
     upstream_state_tx: Sender<WsUpstreamState>,
     /// Shared client, to perform ICMP V4 ping request simultaneously to multiple upstream nodes
@@ -52,7 +53,7 @@ pub struct RoutingTable {
 impl RoutingTable {
     pub async fn new(
         base_chain_urls: Vec<Url>,
-        dispatcher_tx: Sender<SubscriptionAction>,
+        dispatcher_tx: Sender<Subscription>,
         upstream_state_tx: Sender<WsUpstreamState>,
         proximity_ping_frequency: u64,
     ) -> RouterResult<Arc<Self>> {
@@ -203,11 +204,9 @@ impl RoutingTable {
             tx,
             payload: program_subscription_json(request_id, mdp::id(), None),
             destination: self.base_chain().ws_url.clone(),
+            upstream: PubSubUpstreamKind::Chain,
         };
-        let _ = self
-            .dispatcher_tx
-            .send(SubscriptionAction::Subscribe(subscription.clone()))
-            .await;
+        let _ = self.dispatcher_tx.send(subscription.clone()).await;
         let mut ping_ticker = time::interval(Duration::from_secs(proximity_ping_frequency));
         let mut pings = FuturesUnordered::new();
 
@@ -216,8 +215,8 @@ impl RoutingTable {
             tokio::select! {
                     Some(msg) = rx.recv() => {
                         match msg {
-                            PubsubMessage::Subscribed(id) => {
-                                tracing::info!(id = id.0, "subscribed to MDP program accounts");
+                            PubsubMessage::Subscribed(handle) => {
+                                tracing::info!(id = handle.request_id.0, "subscribed to MDP program accounts");
                             }
                             PubsubMessage::Notification { ref payload, .. } => {
                                 let Some(pubkey) = deserialize_field::<&str>(payload, &["value", "pubkey"])
@@ -242,7 +241,7 @@ impl RoutingTable {
                                 subscription.destination = self.base_chain().ws_url.clone();
                                 let _ = self
                                     .dispatcher_tx
-                                    .send(SubscriptionAction::Subscribe(subscription.clone()))
+                                    .send(subscription.clone())
                                     .await;
                                 }
                         }
@@ -267,7 +266,7 @@ impl RoutingTable {
                             } else {
                                 self.ping_client_v6.clone()
                             };
-                            tracing::info!("pinging {addr}");
+                            tracing::debug!("pinging {addr}");
                             let task = async move {
                                 let mut pinger = client.pinger(addr, ping_id.into()).await;
                                 pinger
