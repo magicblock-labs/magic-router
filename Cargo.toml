@@ -33,9 +33,11 @@ tokio-util = { version = "0.7", features = [ "compat" ] }
 solana-account = { version = "2.2" }
 solana-account-decoder = { version = "2.2" }
 solana-commitment-config = { version = "2.2" }
+solana-epoch-info = { version = "2.2" }
+solana-epoch-schedule = { version = "2.2" }
 solana-pubkey = { version = "2.2", features = [ "serde" ] }
-solana-rpc-client-api = { version = "2.2" }
 solana-rpc-client = { version = "2.2" }
+solana-rpc-client-api = { version = "2.2" }
 solana-signature = { version = "2.2" }
 solana-transaction = { version = "2.2" }
 solana-transaction-error = { version = "2.2" }
