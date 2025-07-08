@@ -445,3 +445,14 @@ async fn test_send_and_confirm_transaction() {
         "signature mismatch in the sendTransaction result"
     );
 }
+
+#[tokio::test]
+async fn test_mocked_methods() {
+    let env = TestEnv::init().await;
+    let result = env.router_client.get_first_available_block().await;
+    assert!(result.is_ok(), "getFirstAvailableBlock method failed");
+    let result = env.router_client.get_epoch_schedule().await;
+    assert!(result.is_ok(), "getEpochSchedule method failed");
+    let result = env.router_client.get_epoch_info().await;
+    assert!(result.is_ok(), "getEpochInfo method failed");
+}
