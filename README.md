@@ -54,13 +54,24 @@ requests:
    return an error. The matched route for the transaction signature will linger
    in the router for a while, so, methods like `getSignatureStatuses` or
    `getTransaction` can be routed to the same upstream
-7. [getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) -
-only makes sense for transactions which were recently sent through the router
+7. [getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) - only 
+   makes sense for transactions which were recently sent through the router
 8. [getTransaction](https://solana.com/docs/rpc/http/gettransaction) - only
    makes sense for transactions which were recently sent through the router
-9. **getRoutes** - a custom method to query all the ER nodes known to the
+9. [getFirstAvailableBlock](https://solana.com/docs/rpc/http/getfirstavailableblock) - dummy 
+   method used primarily for compatibility with solana explorer, the returned value should not be used for any decision making
+10. [getEpochSchedule](https://solana.com/docs/rpc/http/getEpochSchedule) - dummy 
+   method used primarily for compatibility with solana explorer, the returned value should not be used for any decision making
+11. [getEpochInfo](https://solana.com/docs/rpc/http/getEpochInfo) - dummy 
+   method used primarily for compatibility with solana explorer, the returned value should not be used for any decision making
+
+### Custom Methods
+There're also a few methods which are unique to the router, and as a result
+they go beyond the solana JSON RPC API spec
+
+1. **getRoutes** - a custom method to query all the ER nodes known to the
    router
-9. **getBlockhashForAccounts** - another custom method to query the blockhash
+2. **getBlockhashForAccounts** - another custom method to query the blockhash
    for the provided list of accounts. The list of accounts is usually delegated
    writeable accounts from the transaction that needs to be signed. If the
    accounts are delegated to different ER nodes, the method will return an
