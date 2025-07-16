@@ -10,7 +10,7 @@ use solana_rpc_client_api::config::RpcAccountInfoConfig;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
-    accounts::{DelegationStatus, DELEGATION_PROGRAM_STR},
+    accounts::DELEGATION_PROGRAM_STR,
     cache::{delegations::DelegationsCache, routes::RoutingTable},
     error::RouterError,
     pubsub::{
@@ -43,18 +43,18 @@ impl WebsocketRpcServer for WebsocketServer {
         params: Option<RpcAccountInfoConfig>,
     ) -> SubscriptionResult {
         let pubkey = pubkey.0;
-        let status = self.delegations.get_delegation_status(pubkey).await;
+        let authority = self.delegations.get_delegation_authority(pubkey).await;
 
         let chain = self.routes.base_chain().ws_url.clone();
-        let ephem = match status {
-            DelegationStatus::Delegated(validator) => {
+        let ephem = match authority {
+            Some(validator) => {
                 let ephem = self
                     .routes
                     .ephemeral_url(&validator)
                     .ok_or_else(|| RouterError::UnknownErNode(validator))?;
                 Some(ephem)
             }
-            DelegationStatus::NotDelegated => None,
+            None => None,
         };
 
         let (pubsub_tx, mut pubsub_rx) = mpsc::channel(1024);
@@ -143,8 +143,8 @@ impl SubscriptionHandler {
         }
         match upstream {
             PubSubUpstreamKind::Chain => {
-                let status = self.delegations.get_delegation_status(self.pubkey).await;
-                if let DelegationStatus::Delegated(identity) = status {
+                let authority = self.delegations.get_delegation_authority(self.pubkey).await;
+                if let Some(identity) = authority {
                     let Some(destination) = self.routes.ephemeral_url(&identity) else {
                         tracing::warn!(
                             account = %self.pubkey, %identity,
@@ -232,14 +232,14 @@ impl SubscriptionHandler {
                                 continue
                             };
                             tracing::warn!(id=id.0, "subscription has lost upstream connection, resubscribing");
-                            let status = self.delegations.get_delegation_status(self.pubkey).await;
+                            let authority = self.delegations.get_delegation_authority(self.pubkey).await;
                             let payload = account_subscription_json(
                                 handle.request_id,
                                 self.pubkey,
                                 self.params.clone()
                             );
-                            let destination = match status {
-                                DelegationStatus::Delegated(validator) => {
+                            let destination = match authority {
+                                Some(validator) => {
                                     let Some(url) = self.routes.ephemeral_url(&validator) else {
                                         tracing::warn!(
                                             account = %self.pubkey, %validator,
@@ -250,7 +250,7 @@ impl SubscriptionHandler {
                                     };
                                     url
                                 }
-                                DelegationStatus::NotDelegated => self.routes.base_chain().ws_url.clone(),
+                                None => self.routes.base_chain().ws_url.clone(),
                             };
                             let sub = Subscription {
                                 request_id: handle.request_id,

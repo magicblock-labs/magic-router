@@ -16,7 +16,7 @@ use solana_transaction_status_client_types::{
     EncodedConfirmedTransactionWithStatusMeta, TransactionStatus,
 };
 
-use crate::types::{RouteInfo, RpcIdentity, SerdePubkey};
+use crate::types::{DelegationStatus, RouteInfo, RpcIdentity, SerdePubkey};
 
 #[rpc(server)]
 pub trait RoHttpRpc {
@@ -97,6 +97,12 @@ pub trait RoHttpRpc {
             transaction_count: None,
         })
     }
+
+    #[method(name = "getDelegationStatus")]
+    async fn delegation_status(&self, pubkey: SerdePubkey) -> RpcResult<DelegationStatus>;
+
+    #[method(name = "getLatestBlockhash")]
+    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>>;
 }
 
 #[rpc(server)]

@@ -14,6 +14,7 @@ use std::{
 use jsonrpsee::{http_client::HttpClient, server::ServerHandle};
 use router::config::{RouterConfig, WebsocketConnectionConfig};
 use server::MockServer;
+use solana_account::Account;
 use solana_pubkey::Pubkey;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -87,13 +88,13 @@ impl TestEnv {
         self.chain.add_account(pubkey, owner);
     }
 
-    pub async fn delegate_account(&mut self, pubkey: Pubkey, er_node: Pubkey) {
+    pub async fn delegate_account(&mut self, pubkey: Pubkey, owner: Pubkey, er_node: Pubkey) {
         self.delegations.insert(pubkey, er_node);
         let Some(node) = self.er_nodes.get_mut(&er_node) else {
             return;
         };
-        let account = self.chain.delegate_account(pubkey, er_node).await;
-        node.add_existing_account(pubkey, account);
+        let record = self.chain.delegate_account(pubkey, owner, er_node).await;
+        node.add_existing_account(pubkey, record);
         sleep().await;
     }
 

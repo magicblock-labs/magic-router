@@ -37,7 +37,7 @@ async fn test_get_account_info() {
     // wait a bit for router to subscribe to update
     sleep().await;
     // delegate account to the ER, we spun up earlier
-    env.delegate_account(pubkey, er_identity).await;
+    env.delegate_account(pubkey, owner, er_identity).await;
     // change the account on main chain, updating its balance
     env.update_account_balance(pubkey, 42, true).await;
 
@@ -91,7 +91,7 @@ async fn test_get_account_balance() {
     // wait a bit for router to subscribe to update
     sleep().await;
     // delegate account to the ER, we spun up earlier
-    env.delegate_account(pubkey, er_identity).await;
+    env.delegate_account(pubkey, owner, er_identity).await;
     // change the account on main chain, updating its balance
     env.update_account_balance(pubkey, 42, true).await;
 
@@ -144,7 +144,7 @@ async fn test_get_token_account_balance() {
         .expect("failed to get account balance from chain");
     sleep().await;
     // delegate account to the ER, we spun up earlier
-    env.delegate_account(pubkey, er_identity).await;
+    env.delegate_account(pubkey, owner, er_identity).await;
     // change the account on main chain, updating its token balance
     env.update_token_balance(pubkey, 42, true).await;
 
@@ -203,7 +203,7 @@ async fn test_get_multiple_accounts() {
     );
     sleep().await;
     // delegate the first account to the ER, we spun up earlier
-    env.delegate_account(pubkey1, er_identity).await;
+    env.delegate_account(pubkey1, owner, er_identity).await;
     // change the account on main chain, updating its balance
     env.update_token_balance(pubkey1, 42, true).await;
 
@@ -400,8 +400,8 @@ async fn test_get_blockhash_for_accounts() {
     env.add_account(pubkey1, owner);
     env.add_account(pubkey2, owner);
 
-    env.delegate_account(pubkey1, er_identity).await;
-    env.delegate_account(pubkey2, er_identity).await;
+    env.delegate_account(pubkey1, owner, er_identity).await;
+    env.delegate_account(pubkey2, owner, er_identity).await;
 
     let response = client
         .post(env.router_client.url().parse::<Url>().unwrap())
@@ -455,4 +455,102 @@ async fn test_mocked_methods() {
     assert!(result.is_ok(), "getEpochSchedule method failed");
     let result = env.router_client.get_epoch_info().await;
     assert!(result.is_ok(), "getEpochInfo method failed");
+}
+
+#[tokio::test]
+async fn test_get_delegation_status() {
+    let mut env = TestEnv::init().await;
+    let client = reqwest::Client::new();
+    let er_identity = Pubkey::new_unique();
+
+    let owner = Pubkey::new_unique();
+    let pubkey = Pubkey::new_unique();
+    // spin up a new mock ephemerals
+    env.add_route(er_identity).await;
+    // give the router time to sync up with ephemerals
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // add new account to main chain
+    env.add_account(pubkey, owner);
+
+    let response = client
+        .post(env.router_client.url().parse::<Url>().unwrap())
+        .header(CONTENT_TYPE, "application/json")
+        .body(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"getDelegationStatus","params":["{pubkey}"]}}"#
+        ))
+        .send()
+        .await
+        .expect("failed to send getDelegationStatus request to the router");
+    let response = response
+        .text()
+        .await
+        .expect("recieved garbage response for getDelegationStatus");
+
+    let response = json::from_str::<json::Value>(&response);
+    let is_delegated = response
+        .get("result")
+        .and_then(|r| r.as_object())
+        .and_then(|r| r.get(&"isDelegated"))
+        .and_then(|h| h.as_bool())
+        .expect("getDelegationStatus json contains invalid data");
+    assert!(!is_delegated, "account should not have been delegated");
+
+    env.delegate_account(pubkey, owner, er_identity).await;
+
+    let response = client
+        .post(env.router_client.url().parse::<Url>().unwrap())
+        .header(CONTENT_TYPE, "application/json")
+        .body(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"getDelegationStatus","params":["{pubkey}"]}}"#
+        ))
+        .send()
+        .await
+        .expect("failed to send getDelegationStatus request to the router");
+    let response = response
+        .text()
+        .await
+        .expect("recieved garbage response for getDelegationStatus");
+
+    let response = json::from_str::<json::Value>(&response);
+    let is_delegated = response
+        .get("result")
+        .and_then(|r| r.as_object())
+        .and_then(|r| r.get(&"isDelegated"))
+        .and_then(|h| h.as_bool())
+        .expect("getDelegationStatus json contains invalid data");
+    assert!(is_delegated, "account should have been delegated");
+
+    let authority = response
+        .get("result")
+        .and_then(|r| r.as_object())
+        .and_then(|r| r.get(&"delegationRecord"))
+        .and_then(|h| h.as_object())
+        .and_then(|r| r.get(&"authority"))
+        .and_then(|a| a.as_str())
+        .expect("getDelegationStatus json contains invalid data");
+    assert_eq!(
+        authority,
+        er_identity.to_string(),
+        "account should have been delegated to specified ER"
+    )
+}
+
+#[tokio::test]
+async fn test_get_latest_blockhash() {
+    let mut env = TestEnv::init().await;
+    let er_identity1 = Pubkey::new_unique();
+    let er_identity2 = Pubkey::new_unique();
+
+    // spin up 2 new mock ephemerals
+    env.add_route(er_identity1).await;
+    env.add_route(er_identity2).await;
+    // give the router time to sync up with ephemerals
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let (_, slot) = env
+        .router_client
+        .get_latest_blockhash_with_commitment(Default::default())
+        .await
+        .expect("failed to fetch latest blockhash from the router");
+    assert_eq!(slot, 300, "router didn't return mock slot");
 }

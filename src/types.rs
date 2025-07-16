@@ -94,6 +94,23 @@ pub struct RpcIdentity {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct DelegationStatus {
+    pub is_delegated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation_record: Option<ParsedDelegationRecord>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedDelegationRecord {
+    pub authority: SerdePubkey,
+    pub owner: SerdePubkey,
+    pub delegation_slot: u64,
+    pub lamports: u64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct RouteInfo {
     pub identity: SerdePubkey,
     pub fqdn: String,

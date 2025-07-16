@@ -10,6 +10,7 @@ use std::{
 
 use base64::Engine;
 use borsh::{BorshDeserialize, BorshSerialize};
+use dlp::state::DelegationRecord;
 use json::Serialize;
 use jsonrpsee::{
     core::{async_trait, RpcResult, SubscriptionResult},
@@ -22,14 +23,13 @@ use mdp::state::{
     features::FeaturesSet, record::ErRecord, status::ErStatus, version::v0::RecordV0,
 };
 use router::{
-    accounts::{DELEGATION_PROGRAM, DELEGATION_RECORD_DATA_SIZE},
     cache::delegations::delegation_record_pda,
     error::RouterError,
     rpc::{
         http::{RoHttpRpcServer, RwHttpRpcServer},
         websocket::WebsocketRpcServer,
     },
-    types::{RouteInfo, RpcIdentity, SerdePubkey},
+    types::{DelegationStatus, ParsedDelegationRecord, RouteInfo, RpcIdentity, SerdePubkey},
 };
 use scc::HashMap;
 use solana_account::{Account, ReadableAccount, WritableAccount};
@@ -51,6 +51,8 @@ use solana_transaction_status_client_types::{
     EncodedTransactionWithStatusMeta, TransactionBinaryEncoding, TransactionConfirmationStatus,
     TransactionStatus, UiTransactionEncoding,
 };
+
+const TEST_LAMPORTS: u64 = 23242400;
 
 #[derive(Clone)]
 pub struct MockServer {
@@ -84,10 +86,10 @@ impl MockServer {
         (this, handle)
     }
 
-    pub fn add_account(&self, pubkey: Pubkey, owner: Pubkey) {
-        let _ = self
-            .accounts
-            .insert(pubkey, Account::new(23242400, 165, &owner));
+    pub fn add_account(&self, pubkey: Pubkey, owner: Pubkey) -> Account {
+        let account = Account::new(TEST_LAMPORTS, 165, &owner);
+        let _ = self.accounts.insert(pubkey, account.clone());
+        account
     }
 
     pub fn add_existing_account(&self, pubkey: Pubkey, account: Account) {
@@ -168,13 +170,29 @@ impl MockServer {
         let _ = self.accounts.insert(pda, account);
     }
 
-    pub async fn delegate_account(&self, acc: Pubkey, er_node: Pubkey) -> Account {
-        let pda = delegation_record_pda(acc);
-        let mut data = vec![0; DELEGATION_RECORD_DATA_SIZE];
+    pub async fn delegate_account(
+        &self,
+        pubkey: Pubkey,
+        owner: Pubkey,
+        er_node: Pubkey,
+    ) -> Account {
+        let pda = dlp::pda::delegation_record_pda_from_delegated_account(&pubkey);
+        let delegation_record = DelegationRecord {
+            authority: er_node,
+            owner,
+            lamports: TEST_LAMPORTS,
+            delegation_slot: 42,
+            commit_frequency_ms: 0,
+        };
+        let mut data = vec![0; DelegationRecord::size_with_discriminator()];
+        delegation_record
+            .to_bytes_with_discriminator(&mut data)
+            .expect("failed to serialize the delegation record");
         data[8..40].copy_from_slice(er_node.as_ref());
+
         let delegation_record = Account {
             lamports: 1559040,
-            owner: DELEGATION_PROGRAM,
+            owner: dlp::id(),
             data,
             executable: false,
             rent_epoch: u64::MAX,
@@ -182,10 +200,13 @@ impl MockServer {
         self.notify_account(&pda, &delegation_record).await;
         let _ = self.accounts.insert(pda, delegation_record);
 
-        let mut account = self.accounts.get(&acc).expect("account doesn't exist");
+        let mut account = self
+            .accounts
+            .get(&pubkey)
+            .expect("delegated account doesn't exist");
         let original_account = account.clone();
-        account.set_owner(DELEGATION_PROGRAM);
-        self.notify_account(&acc, account.get()).await;
+        account.set_owner(dlp::id());
+        self.notify_account(&pubkey, account.get()).await;
 
         original_account
     }
@@ -353,6 +374,39 @@ impl RoHttpRpcServer for MockServer {
         };
         Ok(response)
     }
+
+    async fn delegation_status(&self, pubkey: SerdePubkey) -> RpcResult<DelegationStatus> {
+        let pda = dlp::pda::delegation_record_pda_from_delegated_account(&pubkey.0);
+        let record = self.account(&pda);
+        let record = record
+            .and_then(|r| {
+                DelegationRecord::try_from_bytes_with_discriminator(&r.data)
+                    .ok()
+                    .copied()
+            })
+            .map(|r| ParsedDelegationRecord {
+                authority: SerdePubkey(r.authority),
+                owner: SerdePubkey(r.owner),
+                lamports: r.lamports,
+                delegation_slot: r.delegation_slot,
+            });
+        let status = DelegationStatus {
+            is_delegated: record.is_some(),
+            delegation_record: record,
+        };
+        Ok(status)
+    }
+
+    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>> {
+        let value = RpcBlockhash {
+            blockhash: Hash::new_unique().to_string(),
+            last_valid_block_height: 150,
+        };
+        Ok(Response {
+            context: RpcResponseContext::new(0),
+            value,
+        })
+    }
 }
 
 #[async_trait]
@@ -418,9 +472,6 @@ pub trait TestHttpRpc {
         pubkey: SerdePubkey,
         params: Option<RpcAccountInfoConfig>,
     ) -> SubscriptionResult;
-
-    #[method(name = "getLatestBlockhash")]
-    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>>;
 }
 
 #[async_trait]
@@ -463,17 +514,6 @@ impl TestHttpRpcServer for MockServer {
         let sink = sink.accept().await?;
         let _ = self.program_subscriptions.insert(pubkey.0, sink);
         Ok(())
-    }
-
-    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>> {
-        let value = RpcBlockhash {
-            blockhash: Hash::new_unique().to_string(),
-            last_valid_block_height: 150,
-        };
-        Ok(Response {
-            context: RpcResponseContext::new(0),
-            value,
-        })
     }
 }
 
