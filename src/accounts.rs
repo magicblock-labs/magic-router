@@ -1,41 +1,11 @@
-use std::fmt::Display;
-
-use solana_pubkey::Pubkey;
-
-use crate::types::RequestId;
+use crate::types::{ParsedDelegationRecord, RequestId};
 pub const DELEGATION_PROGRAM_STR: &str = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
-pub const DELEGATION_PROGRAM: Pubkey = Pubkey::from_str_const(DELEGATION_PROGRAM_STR);
-/// Serialized size of delegation record PDA
-/// NOTE: this is taken from the delegation program
-pub const DELEGATION_RECORD_DATA_SIZE: usize = 96;
 
 /// Delegation metadata for account
 pub struct DelegationEntry {
     /// Unique request ID associated with websocket subscription,
     /// which keeps track of any delegation status change
     pub request_id: RequestId,
-    /// Delegation status of the account
-    pub status: DelegationStatus,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum DelegationStatus {
-    Delegated(Pubkey),
-    NotDelegated,
-}
-
-impl DelegationStatus {
-    #[inline(always)]
-    pub fn is_delegated(&self) -> bool {
-        matches!(self, Self::Delegated(_))
-    }
-}
-
-impl Display for DelegationStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Delegated(pk) => write!(f, "DELEGATED TO {pk}"),
-            Self::NotDelegated => write!(f, "NOT DELEGATED"),
-        }
-    }
+    /// Optional parsed delegation record
+    pub record: Option<ParsedDelegationRecord>,
 }

@@ -130,9 +130,9 @@ impl RoutingTable {
         &self.base_chain.upstreams[index]
     }
 
-    pub fn closest_node(&self) -> (SerdePubkey, String) {
+    pub fn closest_node(&self) -> (SerdePubkey, Arc<RpcClient>) {
         let mut node_id = Pubkey::default();
-        let mut fqdn = String::default();
+        let mut client = self.base_chain().client.clone();
         let mut min_proximity = u64::MAX;
         self.inner.scan(|pubkey, record| {
             if min_proximity <= record.proximity_micros {
@@ -140,9 +140,9 @@ impl RoutingTable {
             }
             min_proximity = record.proximity_micros;
             node_id = *pubkey;
-            fqdn = record.client.url()
+            client = record.client.clone();
         });
-        (SerdePubkey(node_id), fqdn)
+        (SerdePubkey(node_id), client)
     }
 
     pub async fn all_routes(&self) -> Vec<RouteInfo> {

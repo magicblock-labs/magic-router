@@ -59,11 +59,20 @@ requests:
 8. [getTransaction](https://solana.com/docs/rpc/http/gettransaction) - only
    makes sense for transactions which were recently sent through the router
 9. [getFirstAvailableBlock](https://solana.com/docs/rpc/http/getfirstavailableblock) - dummy 
-   method used primarily for compatibility with solana explorer, the returned value should not be used for any decision making
-10. [getEpochSchedule](https://solana.com/docs/rpc/http/getEpochSchedule) - dummy 
-   method used primarily for compatibility with solana explorer, the returned value should not be used for any decision making
-11. [getEpochInfo](https://solana.com/docs/rpc/http/getEpochInfo) - dummy 
-   method used primarily for compatibility with solana explorer, the returned value should not be used for any decision making
+   method used primarily for compatibility with solana explorer, the returned
+   value should not be used for any decision making
+10. [getEpochSchedule](https://solana.com/docs/rpc/http/getEpochSchedule) -
+    dummy 
+   method used primarily for compatibility with solana explorer, the returned
+   value should not be used for any decision making
+11. [getEpochInfo](https://solana.com/docs/rpc/http/getEpochInfo) - dummy
+    method used primarily for compatibility with solana explorer, the returned
+   value should not be used for any decision making
+12. [getLatestBlockHash](https://solana.com/docs/rpc/http/getlatestblockhash) -
+    a best effort method which returns the blockhash from the closest ER node.
+    Note, if the network topology changes, the closest ER along with it, then
+    it will cause transactions signed with the given blockhash to fail, as it
+    was obtained from the wrong ER
 
 ### Custom Methods
 There're also a few methods which are unique to the router, and as a result
@@ -77,6 +86,9 @@ they go beyond the solana JSON RPC API spec
    accounts are delegated to different ER nodes, the method will return an
    error. If the accounts are not delegated the returned blockhash is from the
    base chain.
+3. **getDelegationStatus** - custom method which retrieves the delegation
+   status of the account along with the parsed delegation record (if
+   applicable)
 
 ## API Documentation
 
@@ -126,7 +138,7 @@ Returns information about all Ephemeral Rollup (ER) nodes known to the router.
 
 ### getBlockhashForAccounts
 
-Returns the latest blockhash for a list of accounts. This method is neccessary in order to abstract away the splitting in hte frontend.
+Returns the latest blockhash for a list of accounts. This method is necessary in order to abstract away the splitting in the frontend.
 
 **Example Request:**
 ```json
@@ -142,8 +154,6 @@ Returns the latest blockhash for a list of accounts. This method is neccessary i
   ]
 }
 ```
-
-```bash
 
 **Example Response:**
 ```json
@@ -169,6 +179,58 @@ Returns the latest blockhash for a list of accounts. This method is neccessary i
 
 **Error Cases:**
 - `ConflictingDelegations`: When accounts are delegated to different ER nodes
+- `UnknownErNode`: When an ER node is not found in the routing table
+
+### getDelegationStatus
+Returns the delegation status along with ER record for the given account 
+
+**Example Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "getDelegationStatus",
+  "params": ["7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"]
+}
+```
+
+
+**Example Response 1:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "isDelegated": false
+  }
+}
+```
+**Example Response 2:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "isDelegated": true,
+    "delegationRecord": {
+      "authority": "11111111111111111111111111111111",
+      "owner": "3JnJ727jWEmPVU8qfXwtH63sCNDX7nMgsLbg8qy8aaPX",
+      "delegationSlot": 388473478,
+      "lamports": 15144960
+    }
+  }
+}
+```
+
+**Response Fields:**
+- `isDelegated` (bool): flag indicating whether the account is delegated 
+- `delegationRecord` (object): the parsed delegation record for the delegated account (not present for non-delegated accounts)
+    - `authority` (string): the ER identity (authority), which was used to delegated the account to
+    - `owner` (string): the original owner of the delegated account
+    - `delegationSlot` (number): base chain slot, at which the account has been delegated 
+    - `lamports` (number): base chain balance of the account, recorded at the moment of delegation
+
+**Error Cases:**
 - `UnknownErNode`: When an ER node is not found in the routing table
 
 ## Supported WebSocket Subscriptions

@@ -30,7 +30,7 @@ async fn test_account_subscribe() {
         response.value.lamports, 42,
         "account balance should have been updated on main chain"
     );
-    env.delegate_account(pubkey, er_identity).await;
+    env.delegate_account(pubkey, owner, er_identity).await;
     let response = sub
         .next()
         .await

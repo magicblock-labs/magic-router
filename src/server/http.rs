@@ -18,7 +18,8 @@ use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
 };
 use solana_commitment_config::CommitmentConfig;
-use solana_rpc_client::rpc_client::SerializableTransaction;
+use solana_pubkey::Pubkey;
+use solana_rpc_client::{nonblocking::rpc_client::RpcClient, rpc_client::SerializableTransaction};
 use solana_rpc_client_api::{
     config::{
         RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig, RpcTransactionConfig,
@@ -32,13 +33,13 @@ use solana_transaction_status_client_types::{
 };
 
 use crate::{
-    accounts::DelegationStatus,
     cache::{
         delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
     },
     error::RouterError,
     rpc::http::{RoHttpRpcServer, RwHttpRpcServer},
-    types::{RouteInfo, RpcIdentity, SerdePubkey},
+    types::{DelegationStatus, RouteInfo, RpcIdentity, SerdePubkey},
+    RouterResult,
 };
 
 /// Http server implementation for handling solana JSON-RPC requests
@@ -52,6 +53,19 @@ pub struct HttpServer {
     pub transactions: Arc<ForwardedTransactions>,
 }
 
+impl HttpServer {
+    async fn resolve_client(&self, pubkey: Pubkey) -> RouterResult<Arc<RpcClient>> {
+        let client = match self.delegations.get_delegation_authority(pubkey).await {
+            Some(identity) => self
+                .routes
+                .ephemeral_client(&identity)
+                .ok_or_else(|| RouterError::UnknownErNode(identity))?,
+            None => self.routes.base_chain().client.clone(),
+        };
+        Ok(client)
+    }
+}
+
 #[async_trait]
 impl RoHttpRpcServer for HttpServer {
     async fn account_info(
@@ -60,13 +74,7 @@ impl RoHttpRpcServer for HttpServer {
         params: Option<RpcAccountInfoConfig>,
     ) -> RpcResult<Response<Option<UiAccount>>> {
         let pubkey = pubkey.0;
-        let client = match self.delegations.get_delegation_status(pubkey).await {
-            DelegationStatus::Delegated(identity) => self
-                .routes
-                .ephemeral_client(&identity)
-                .ok_or_else(|| RouterError::UnknownErNode(identity))?,
-            DelegationStatus::NotDelegated => self.routes.base_chain().client.clone(),
-        };
+        let client = self.resolve_client(pubkey).await?;
         let config = params.unwrap_or_default();
         let encoding = config.encoding.unwrap_or(UiAccountEncoding::Base64Zstd);
         let data_slice_config = config.data_slice;
@@ -98,18 +106,18 @@ impl RoHttpRpcServer for HttpServer {
         let mut response = vec![None; pubkeys.len()];
         let mut futures = Vec::with_capacity(pubkeys.len());
         for pk in pubkeys.iter().map(|k| k.0) {
-            let resolution = self.delegations.get_delegation_status(pk);
+            let resolution = self.delegations.get_delegation_authority(pk);
             futures.push(resolution);
         }
         for (i, (status, pk)) in join_all(futures).await.into_iter().zip(pubkeys).enumerate() {
             match status {
-                DelegationStatus::Delegated(identity) => {
+                Some(identity) => {
                     delegated_pubkeys
                         .entry(identity)
                         .or_default()
                         .push((i, pk.0));
                 }
-                DelegationStatus::NotDelegated => {
+                None => {
                     undelegated_pubkeys.push((i, pk.0));
                 }
             }
@@ -171,13 +179,7 @@ impl RoHttpRpcServer for HttpServer {
         params: Option<RpcContextConfig>,
     ) -> RpcResult<Response<u64>> {
         let pubkey = pubkey.0;
-        let client = match self.delegations.get_delegation_status(pubkey).await {
-            DelegationStatus::Delegated(identity) => self
-                .routes
-                .ephemeral_client(&identity)
-                .ok_or_else(|| RouterError::UnknownErNode(identity))?,
-            DelegationStatus::NotDelegated => self.routes.base_chain().client.clone(),
-        };
+        let client = self.resolve_client(pubkey).await?;
         let commitment = params.unwrap_or_default().commitment.unwrap_or_default();
         client
             .get_balance_with_commitment(&pubkey, commitment)
@@ -192,13 +194,7 @@ impl RoHttpRpcServer for HttpServer {
         params: Option<RpcContextConfig>,
     ) -> RpcResult<Response<UiTokenAmount>> {
         let pubkey = pubkey.0;
-        let client = match self.delegations.get_delegation_status(pubkey).await {
-            DelegationStatus::Delegated(identity) => self
-                .routes
-                .ephemeral_client(&identity)
-                .ok_or_else(|| RouterError::UnknownErNode(identity))?,
-            DelegationStatus::NotDelegated => self.routes.base_chain().client.clone(),
-        };
+        let client = self.resolve_client(pubkey).await?;
         let commitment = params.unwrap_or_default().commitment.unwrap_or_default();
         client
             .get_token_account_balance_with_commitment(&pubkey, commitment)
@@ -208,8 +204,11 @@ impl RoHttpRpcServer for HttpServer {
     }
 
     async fn identity(&self) -> RpcResult<RpcIdentity> {
-        let (identity, fqdn) = self.routes.closest_node();
-        Ok(RpcIdentity { identity, fqdn })
+        let (identity, client) = self.routes.closest_node();
+        Ok(RpcIdentity {
+            identity,
+            fqdn: client.url(),
+        })
     }
 
     async fn signature_statuses(
@@ -263,9 +262,7 @@ impl RoHttpRpcServer for HttpServer {
     async fn blockhash_for_accounts(&self, accounts: Vec<SerdePubkey>) -> RpcResult<RpcBlockhash> {
         let mut delegated = None;
         for pk in accounts {
-            let DelegationStatus::Delegated(validator) =
-                self.delegations.get_delegation_status(pk.0).await
-            else {
+            let Some(validator) = self.delegations.get_delegation_authority(pk.0).await else {
                 continue;
             };
 
@@ -292,6 +289,31 @@ impl RoHttpRpcServer for HttpServer {
             last_valid_block_height: slot,
         };
         Ok(response)
+    }
+
+    async fn delegation_status(&self, pubkey: SerdePubkey) -> RpcResult<DelegationStatus> {
+        let record = self.delegations.get_record(pubkey.0).await;
+        let status = DelegationStatus {
+            is_delegated: record.is_some(),
+            delegation_record: record,
+        };
+        Ok(status)
+    }
+
+    async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>> {
+        let (_, client) = self.routes.closest_node();
+        let (hash, slot) = client
+            .get_latest_blockhash_with_commitment(CommitmentConfig::confirmed())
+            .await
+            .map_err(RouterError::from)?;
+        let value = RpcBlockhash {
+            blockhash: hash.to_string(),
+            last_valid_block_height: slot + 150,
+        };
+        Ok(Response {
+            context: RpcResponseContext::new(slot),
+            value,
+        })
     }
 }
 
@@ -326,32 +348,29 @@ impl RwHttpRpcServer for HttpServer {
                 .map(VersionedTransaction::from)
                 .map_err(RouterError::decode_error)?
         };
-        let mut delegation = DelegationStatus::NotDelegated;
+        let mut delegation = None;
         for (i, pk) in txn.message.static_account_keys().iter().enumerate() {
             if !txn.message.is_maybe_writable(i, None) {
                 continue;
             }
-            let DelegationStatus::Delegated(validator) =
-                self.delegations.get_delegation_status(*pk).await
-            else {
+            let Some(validator) = self.delegations.get_delegation_authority(*pk).await else {
                 continue;
             };
-            let replaced =
-                std::mem::replace(&mut delegation, DelegationStatus::Delegated(validator));
-            let DelegationStatus::Delegated(old) = replaced else {
+            let replaced = delegation.replace(validator);
+            let Some(old) = replaced else {
                 continue;
             };
             if old != validator {
                 Err(RouterError::ConflictingDelegations)?;
             }
         }
-        tracing::debug!(%delegation, "delegation status of transaction accounts");
+        tracing::debug!(?delegation, "delegation status of transaction accounts");
         let client = match delegation {
-            DelegationStatus::Delegated(identity) => self
+            Some(identity) => self
                 .routes
                 .ephemeral_client(&identity)
                 .ok_or_else(|| RouterError::UnknownErNode(identity))?,
-            DelegationStatus::NotDelegated => self.routes.base_chain().client.clone(),
+            None => self.routes.base_chain().client.clone(),
         };
         self.transactions
             .track(*txn.get_signature(), client.clone())

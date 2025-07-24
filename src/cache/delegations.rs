@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use dlp::state::DelegationRecord;
 use scc::{hash_cache::Entry, HashCache, HashMap};
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
@@ -7,15 +8,13 @@ use solana_rpc_client_api::{config::RpcAccountInfoConfig, response::Response};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
-    accounts::{
-        DelegationEntry, DelegationStatus, DELEGATION_PROGRAM, DELEGATION_RECORD_DATA_SIZE,
-    },
+    accounts::DelegationEntry,
     pubsub::{
         notification::{deserialize_account, PubsubMessage, SubscriptionHandle},
         subscription::{account_subscription_json, Subscription, Unsubscription},
         PubSubUpstreamKind,
     },
-    types::{RequestId, SubscriberId, UniqueId},
+    types::{ParsedDelegationRecord, RequestId, SerdePubkey, SubscriberId, UniqueId},
 };
 
 use super::routes::RoutingTable;
@@ -66,25 +65,40 @@ impl DelegationsCache {
         this
     }
 
-    pub async fn get_delegation_status(&self, pubkey: Pubkey) -> DelegationStatus {
+    pub async fn get_delegation_authority(&self, pubkey: Pubkey) -> Option<Pubkey> {
         let pda = delegation_record_pda(pubkey);
         let entry = self.db.get_async(&pda).await;
-        let status = {
+        let authority = {
             if let Some(e) = entry {
-                e.get().status
+                e.get().record.as_ref().map(|r| r.authority.0)
             } else {
-                drop(entry);
-                let status = self.fetch(pda).await;
+                drop(entry); // prevents deadlock
+                let record = self.fetch(pda).await;
+                let authority = record.as_ref().map(|r| r.authority.0);
                 let entry = self.db.entry_async(pda).await;
-                self.insert(entry, pda, status, true).await;
-                status
+                self.insert(entry, pda, true, record).await;
+                authority
             }
         };
-        tracing::debug!("account {pubkey} delegation status has been resolved to {status}");
-        status
+        tracing::debug!("account {pubkey} has been delegated to {authority:?}");
+        authority
     }
 
-    pub async fn fetch(&self, pda: Pubkey) -> DelegationStatus {
+    pub async fn get_record(&self, pubkey: Pubkey) -> Option<ParsedDelegationRecord> {
+        let pda = delegation_record_pda(pubkey);
+        let entry = self.db.get_async(&pda).await;
+        if let Some(e) = entry {
+            e.get().record.clone()
+        } else {
+            drop(entry); // prevents deadlock
+            let record = self.fetch(pda).await;
+            let entry = self.db.entry_async(pda).await;
+            self.insert(entry, pda, true, record.clone()).await;
+            record
+        }
+    }
+
+    pub async fn fetch(&self, pda: Pubkey) -> Option<ParsedDelegationRecord> {
         let chain = &self.routes.base_chain().client;
         let mut attempt = 0;
         loop {
@@ -93,27 +107,20 @@ impl DelegationsCache {
                 .await;
             let record = match response {
                 Ok(Response { value: Some(a), .. }) => a,
-                Ok(Response { value: None, .. }) => {
-                    break DelegationStatus::NotDelegated;
-                }
+                Ok(Response { value: None, .. }) => break None,
                 Err(error) => {
                     // this indicates an actual error, not found was handled in the previous arm
                     tracing::error!(%error, "failed to fetch account {pda} from chain");
                     attempt += 1;
                     if attempt > MAX_ACCOUNT_REFETCH_ATTEMPTS {
-                        break DelegationStatus::NotDelegated;
+                        break None;
                     }
                     tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
                     continue;
                 }
             };
 
-            let Some(identity) = extract_delegation_identity(&record.data) else {
-                break DelegationStatus::NotDelegated;
-            };
-            let status = DelegationStatus::Delegated(identity);
-
-            break status;
+            break extract_delegation_record(&record.data);
         }
     }
 
@@ -121,13 +128,13 @@ impl DelegationsCache {
         &self,
         entry: Entry<'_, Pubkey, DelegationEntry>,
         pda: Pubkey,
-        status: DelegationStatus,
         subscribe: bool,
+        record: Option<ParsedDelegationRecord>,
     ) {
         let request_id = RequestId::generate();
         match entry {
             Entry::Vacant(e) => {
-                let entry = DelegationEntry { status, request_id };
+                let entry = DelegationEntry { request_id, record };
                 if let (Some(evicted), _) = e.put_entry(entry) {
                     let unsub = Unsubscription {
                         subscriber_id: self.subscriber_id,
@@ -143,7 +150,7 @@ impl DelegationsCache {
                     let _ = tx.send(unsub).await;
                 };
             }
-            Entry::Occupied(mut e) => e.status = status,
+            Entry::Occupied(mut e) => e.record = record,
         }
         if subscribe {
             let params = RpcAccountInfoConfig {
@@ -184,9 +191,9 @@ impl DelegationsCache {
                     let account = meta.account;
                     meta.handle.replace(handle);
                     drop(meta);
-                    let status = self.fetch(account).await;
+                    let record = self.fetch(account).await;
                     let entry = self.db.entry_async(account).await;
-                    self.insert(entry, account, status, false).await;
+                    self.insert(entry, account, false, record).await;
                     tracing::debug!(
                         %account,
                         "delegations cache coherence subscription confirmed"
@@ -202,12 +209,10 @@ impl DelegationsCache {
                         );
                         continue;
                     };
-                    let status = if account.lamports == 0 {
-                        DelegationStatus::NotDelegated
+                    let record = if account.lamports == 0 {
+                        None
                     } else {
-                        extract_delegation_identity(&account.data)
-                            .map(DelegationStatus::Delegated)
-                            .unwrap_or(DelegationStatus::NotDelegated)
+                        extract_delegation_record(&account.data)
                     };
                     let Some(entry) = self.subscriptions.get(&id) else {
                         tracing::warn!(
@@ -226,10 +231,19 @@ impl DelegationsCache {
                     };
                     let sts = sts.get_mut();
                     tracing::debug!(
-                        "account {pubkey} has changed its delegation status from {} to {status}",
-                        sts.status
+                        "account {pubkey} has changed its delegation status from {} to {}",
+                        if sts.record.is_some() {
+                            "delegated"
+                        } else {
+                            "not delegated"
+                        },
+                        if record.is_some() {
+                            "delegated"
+                        } else {
+                            "not delegated"
+                        }
                     );
-                    sts.status = status;
+                    sts.record = record;
                 }
                 PubsubMessage::Disconnected(id) => {
                     let Some((_, meta)) = self.subscriptions.remove(&id) else {
@@ -247,18 +261,24 @@ impl DelegationsCache {
 /// One to one PDA derivation logic for delegation record pubkey
 pub fn delegation_record_pda(pubkey: Pubkey) -> Pubkey {
     let seeds: &[&[u8]] = &[b"delegation", pubkey.as_ref()];
-    Pubkey::find_program_address(seeds, &DELEGATION_PROGRAM).0
+    Pubkey::find_program_address(seeds, &dlp::id()).0
 }
 
-fn extract_delegation_identity(data: &[u8]) -> Option<Pubkey> {
+fn extract_delegation_record(data: &[u8]) -> Option<ParsedDelegationRecord> {
     let size = data.len();
-    if size != DELEGATION_RECORD_DATA_SIZE {
+    if size != DelegationRecord::size_with_discriminator() {
         tracing::error!(%size, "unexpected delegation record size");
         return None;
     }
-    let mut buffer = [0u8; 32];
-    // first 8 bytes is a discriminator, followed by 32 bytes
-    // representing the validator identity
-    buffer.copy_from_slice(&data[8..40]);
-    Some(Pubkey::new_from_array(buffer))
+    let record = DelegationRecord::try_from_bytes_with_discriminator(data)
+        .inspect_err(|error| tracing::error!(%error, "failed to parse the delegation record"))
+        .ok()?;
+    let record = ParsedDelegationRecord {
+        authority: SerdePubkey(record.authority),
+        owner: SerdePubkey(record.owner),
+        delegation_slot: record.delegation_slot,
+        lamports: record.lamports,
+    };
+
+    Some(record)
 }
