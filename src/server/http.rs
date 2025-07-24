@@ -106,7 +106,7 @@ impl RoHttpRpcServer for HttpServer {
         let mut response = vec![None; pubkeys.len()];
         let mut futures = Vec::with_capacity(pubkeys.len());
         for pk in pubkeys.iter().map(|k| k.0) {
-            let resolution = self.delegations.get_delegation_status(pk);
+            let resolution = self.delegations.get_delegation_authority(pk);
             futures.push(resolution);
         }
         for (i, (status, pk)) in join_all(futures).await.into_iter().zip(pubkeys).enumerate() {

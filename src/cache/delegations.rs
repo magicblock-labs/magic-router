@@ -74,8 +74,8 @@ impl DelegationsCache {
             } else {
                 drop(entry); // prevents deadlock
                 let record = self.fetch(pda).await;
-                let entry = self.db.entry_async(pda).await;
                 let authority = record.as_ref().map(|r| r.authority.0);
+                let entry = self.db.entry_async(pda).await;
                 self.insert(entry, pda, true, record).await;
                 authority
             }
@@ -91,8 +91,8 @@ impl DelegationsCache {
             e.get().record.clone()
         } else {
             drop(entry); // prevents deadlock
-            let entry = self.db.entry_async(pda).await;
             let record = self.fetch(pda).await;
+            let entry = self.db.entry_async(pda).await;
             self.insert(entry, pda, true, record.clone()).await;
             record
         }
@@ -191,7 +191,7 @@ impl DelegationsCache {
                     let account = meta.account;
                     meta.handle.replace(handle);
                     drop(meta);
-                    let status = self.fetch(account).await;
+                    let record = self.fetch(account).await;
                     let entry = self.db.entry_async(account).await;
                     self.insert(entry, account, false, record).await;
                     tracing::debug!(
