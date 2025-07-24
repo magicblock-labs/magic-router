@@ -74,8 +74,8 @@ impl DelegationsCache {
                 e.get().status
             } else {
                 drop(entry);
-                let entry = self.db.entry_async(pda).await;
                 let status = self.fetch(pda).await;
+                let entry = self.db.entry_async(pda).await;
                 self.insert(entry, pda, status, true).await;
                 status
             }
@@ -181,15 +181,16 @@ impl DelegationsCache {
                     let Some(mut meta) = self.subscriptions.get(&handle.request_id) else {
                         continue;
                     };
-                    let status = self.fetch(meta.account).await;
-                    let entry = self.db.entry_async(meta.account).await;
-                    self.insert(entry, meta.account, status, false).await;
+                    let account = meta.account;
+                    meta.handle.replace(handle);
+                    drop(meta);
+                    let status = self.fetch(account).await;
+                    let entry = self.db.entry_async(account).await;
+                    self.insert(entry, account, status, false).await;
                     tracing::debug!(
-                        id = handle.request_id.0,
-                        pubkey = %meta.account,
+                        %account,
                         "delegations cache coherence subscription confirmed"
                     );
-                    meta.handle.replace(handle);
                 }
                 PubsubMessage::Notification { id, payload, .. } => {
                     let account = deserialize_account(&payload, &["value"]);
@@ -217,6 +218,7 @@ impl DelegationsCache {
                         continue;
                     };
                     let pubkey = entry.get().account;
+                    drop(entry);
                     let Some(mut sts) = self.db.get(&pubkey) else {
                         tracing::warn!("received subscription for unknown pubkey");
                         self.subscriptions.remove(&id);

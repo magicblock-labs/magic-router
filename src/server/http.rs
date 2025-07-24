@@ -9,7 +9,7 @@ use std::{
 };
 
 use base64::Engine;
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{future::join_all, stream::FuturesUnordered, FutureExt, StreamExt};
 use jsonrpsee::{
     core::{async_trait, RpcResult},
     types::ErrorObjectOwned,
@@ -96,13 +96,21 @@ impl RoHttpRpcServer for HttpServer {
         let data_slice_config = config.data_slice;
 
         let mut response = vec![None; pubkeys.len()];
-        for (i, pk) in pubkeys.into_iter().map(|k| k.0).enumerate() {
-            match self.delegations.get_delegation_status(pk).await {
+        let mut futures = Vec::with_capacity(pubkeys.len());
+        for pk in pubkeys.iter().map(|k| k.0) {
+            let resolution = self.delegations.get_delegation_status(pk);
+            futures.push(resolution);
+        }
+        for (i, (status, pk)) in join_all(futures).await.into_iter().zip(pubkeys).enumerate() {
+            match status {
                 DelegationStatus::Delegated(identity) => {
-                    delegated_pubkeys.entry(identity).or_default().push((i, pk));
+                    delegated_pubkeys
+                        .entry(identity)
+                        .or_default()
+                        .push((i, pk.0));
                 }
                 DelegationStatus::NotDelegated => {
-                    undelegated_pubkeys.push((i, pk));
+                    undelegated_pubkeys.push((i, pk.0));
                 }
             }
         }
