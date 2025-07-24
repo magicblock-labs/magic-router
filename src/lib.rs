@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use cache::{
     delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
@@ -12,7 +12,7 @@ use rpc::{
     websocket::WebsocketRpcServer,
 };
 use server::{http::HttpServer, websocket::WebsocketServer};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 pub mod accounts;
 pub mod cache;
@@ -43,17 +43,21 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         .await?;
     let (upstream_state_tx, upstream_state_rx) = mpsc::channel(1024);
     let (requests_tx, requests_rx) = mpsc::channel(1024);
+    // synchronization between RoutingTable and Dispatcher,
+    // to ensure that all connections are established
+    let ready = Arc::new(Notify::new());
     let dispatcher = SubscriptionDispatcher::new(
         upstream_state_rx,
         requests_rx,
         config.websocket.connections_per_upstream,
     );
-    tokio::spawn(dispatcher.run());
+    tokio::spawn(dispatcher.run(Some(ready.clone())));
     let routes = RoutingTable::new(
         config.base_chain_urls,
         requests_tx.clone(),
         upstream_state_tx,
         config.proximity_ping_frequency_sec,
+        ready,
     )
     .await?;
 

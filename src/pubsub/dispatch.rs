@@ -1,10 +1,17 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+};
 
 use flume::{SendError, Sender};
-use tokio::sync::mpsc::Receiver;
+use futures::{stream::FuturesUnordered, StreamExt};
+use tokio::sync::{mpsc::Receiver, Notify};
 use url::Url;
 
-use crate::{pubsub::connection::WebsocketConnection, RouterResult};
+use crate::pubsub::connection::WebsocketConnection;
 
 use super::subscription::Subscription;
 
@@ -21,8 +28,6 @@ pub struct SubscriptionDispatcher {
     upstreams: HashMap<Arc<Url>, Sender<Subscription>>,
     /// Number of websocket connections to spawn for each websocket upstream
     connections_per_upstream: u16,
-    /// Connection ID counter
-    connection_id: u32,
 }
 
 /// Current state of websocket upstream
@@ -42,25 +47,34 @@ impl SubscriptionDispatcher {
             requests_rx,
             upstreams: HashMap::default(),
             connections_per_upstream,
-            connection_id: 0,
         }
     }
 
-    async fn try_spawn_connections(&mut self, url: Arc<Url>) -> RouterResult<()> {
-        let id = self.connection_id;
-        self.connection_id += 1;
+    async fn try_spawn_connections(url: Arc<Url>, count: u16) -> (Arc<Url>, Sender<Subscription>) {
+        static CONNECTION_ID: AtomicU32 = AtomicU32::new(0);
+        tracing::info!("spawning new websocket connections to {url}");
+        let id = CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = flume::bounded(1024);
 
         // for each upstream, spawn the preconfigured number of connections
-        for _ in 0..self.connections_per_upstream {
-            let connection = WebsocketConnection::new(id, url.clone(), rx.clone()).await?;
-            tokio::spawn(connection.run());
+        let mut spawned = 0;
+        for _ in 0..count {
+            let result = WebsocketConnection::new(id, url.clone(), rx.clone()).await;
+            match result {
+                Ok(c) => tokio::spawn(c.run()),
+                Err(error) => {
+                    tracing::warn!(%error, "failed to websocket establish connection to {url}");
+                    continue;
+                }
+            };
+            spawned += 1;
         }
-        self.upstreams.insert(url, tx);
-        Ok(())
+        tracing::info!("{spawned} new websocket connections to {url} has been established");
+        (url, tx)
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(mut self, mut ready: Option<Arc<Notify>>) {
+        let mut connections = FuturesUnordered::new();
         loop {
             tokio::select! {
                 Some(state) = self.upstream_state_rx.recv() => {
@@ -73,9 +87,7 @@ impl SubscriptionDispatcher {
                         continue;
                     }
                     // if upstream is new, spawn new connections to it
-                    if let Err(error) = self.try_spawn_connections(state.url.clone()).await {
-                        tracing::error!(%error, url=%state.url, "failed to init new ws connection to upstream");
-                    }
+                    connections.push(Self::try_spawn_connections(state.url.clone(), self.connections_per_upstream));
                 }
                 Some(request) = self.requests_rx.recv() => {
                     let Some(tx) = self.upstreams.get_mut(&request.destination) else {
@@ -85,6 +97,15 @@ impl SubscriptionDispatcher {
                     if let Err(SendError(r)) = tx.send(request) {
                         tracing::warn!(url=%r.destination, "all connections to the upstream have been terminated");
                         self.upstreams.remove(&r.destination);
+                    }
+                }
+                Some((url, tx)) = connections.next(), if !connections.is_empty() => {
+                    self.upstreams.insert(url, tx);
+                    if !connections.is_empty() {
+                        continue;
+                    }
+                    if let Some(ready) = ready.take()  {
+                        ready.notify_one();
                     }
                 }
                 else => {

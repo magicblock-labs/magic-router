@@ -16,7 +16,10 @@ use solana_account::Account;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use tokio::{
-    sync::mpsc::{self, Sender},
+    sync::{
+        mpsc::{self, Sender},
+        Notify,
+    },
     time,
 };
 use url::Url;
@@ -56,6 +59,7 @@ impl RoutingTable {
         dispatcher_tx: Sender<Subscription>,
         upstream_state_tx: Sender<WsUpstreamState>,
         proximity_ping_frequency: u64,
+        ready: Arc<Notify>,
     ) -> RouterResult<Arc<Self>> {
         let upstreams = base_chain_urls
             .into_iter()
@@ -100,6 +104,7 @@ impl RoutingTable {
         for (pubkey, account) in accounts {
             this.insert_entry(pubkey, account).await;
         }
+        ready.notified().await;
         tokio::spawn(this.clone().updater(proximity_ping_frequency));
         Ok(this)
     }
