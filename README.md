@@ -138,7 +138,7 @@ Returns information about all Ephemeral Rollup (ER) nodes known to the router.
 
 ### getBlockhashForAccounts
 
-Returns the latest blockhash for a list of accounts. This method is neccessary in order to abstract away the splitting in the frontend.
+Returns the latest blockhash for a list of accounts. This method is necessary in order to abstract away the splitting in the frontend.
 
 **Example Request:**
 ```json

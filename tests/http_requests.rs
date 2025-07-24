@@ -484,7 +484,7 @@ async fn test_get_delegation_status() {
     let response = response
         .text()
         .await
-        .expect("recieved garbage response for getDelegationStatus");
+        .expect("received garbage response for getDelegationStatus");
 
     let response = json::from_str::<json::Value>(&response);
     let is_delegated = response
