@@ -44,8 +44,8 @@ solana-transaction-error = { version = "2.2" }
 solana-transaction-status-client-types = { version = "2.2" }
 
 # programs 
-mdp = { package = "magic-domain-program", git = "https://github.com/magicblock-labs/magic-domain-program.git", rev = "3bf9a39" } 
-dlp = { package = "magicblock-delegation-program", git = "https://github.com/magicblock-labs/delegation-program.git", rev = "9570abf" }
+mdp = { package = "magic-domain-program", git = "https://github.com/magicblock-labs/magic-domain-program.git", rev = "3bf9a39", default-features = false } 
+dlp = { package = "magicblock-delegation-program", git = "https://github.com/magicblock-labs/delegation-program.git", rev = "9570abf", features = ["no-entrypoint"] }
 
 # sync
 flume = "0.11"

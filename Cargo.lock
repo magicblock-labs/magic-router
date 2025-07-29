@@ -1897,7 +1897,6 @@ dependencies = [
  "borsh 1.5.7",
  "bytemuck_derive",
  "solana-program",
- "solana-security-txt",
 ]
 
 [[package]]
