@@ -70,10 +70,10 @@ impl WebsocketRpcServer for WebsocketServer {
             upstream: PubSubUpstreamKind::Chain,
         };
         let ephem_subscription = ephem.map(|url| chain_subscription.clone_with_destination(url));
-        let _ = self.dispatcher_tx.send(chain_subscription.clone()).await;
         if let Some(sub) = ephem_subscription.clone() {
             let _ = self.dispatcher_tx.send(sub).await;
         }
+        let _ = self.dispatcher_tx.send(chain_subscription.clone()).await;
         let confirmation = pubsub_rx.recv();
         let message = tokio::time::timeout(UPSTREAM_SUB_CONFIRMATION_TIMEOUT, confirmation)
             .await
@@ -147,11 +147,12 @@ impl SubscriptionHandler {
                 if let Some(identity) = authority {
                     let Some(destination) = self.routes.ephemeral_url(&identity) else {
                         tracing::warn!(
-                            account = %self.pubkey, %identity,
+                            account=%self.pubkey, %identity,
                             "account has been redelegated to the unknown ER"
                         );
                         return;
                     };
+                    tracing::debug!(account=%self.pubkey, %identity, "account has been delegated");
                     let subscriber_id = SubscriberId::generate();
                     let request_id = RequestId::generate();
                     let payload =
@@ -183,7 +184,7 @@ impl SubscriptionHandler {
 
     async fn run(mut self) {
         tracing::debug!(
-            id = self.subscriber_id.0,
+            id = self.subscriber_id.0, pubkey=%self.pubkey,
             "starting the client subscription handler"
         );
         loop {

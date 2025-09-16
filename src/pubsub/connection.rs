@@ -73,7 +73,7 @@ impl WebsocketConnection {
     }
 
     pub async fn run(mut self) {
-        let mut ping = tokio::time::interval(Duration::from_secs(10));
+        let mut ping = tokio::time::interval(Duration::from_secs(5));
         loop {
             tokio::select! {
                 Some(data) = self.receiver.recv() => {
@@ -98,7 +98,11 @@ impl WebsocketConnection {
                     match message {
                         WebsocketMessage::Notification(Notification { params }) => {
                             let Some(listeners) = self.subscriptions.get_mut(&params.subscription) else {
-                                tracing::warn!(id=?params.subscription, "received unknown subscription with no listeners");
+                                tracing::warn!(
+                                    id=?params.subscription,
+                                    url=%self.url,
+                                    "received unknown subscription with no listeners"
+                                );
                                 continue;
                             };
                             let notification = Arc::new(params.result);
@@ -111,7 +115,10 @@ impl WebsocketConnection {
                                     upstream: sh.upstream
                                 };
                                 if sh.tx.send(msg).await.is_err() {
-                                    tracing::warn!(id=id.0, "subscriber has unxpectedly closed the channel");
+                                    tracing::warn!(
+                                        id=id.0,
+                                        "subscriber has unxpectedly closed the channel"
+                                    );
                                     to_remove.push(*id);
                                 }
                             }
@@ -124,9 +131,19 @@ impl WebsocketConnection {
                         }
                         WebsocketMessage::Subscribed(s) => {
                             let Some(sub) = self.inflights.remove(&s.id) else {
-                                tracing::warn!(id=s.id.0, "received sub confirmation for unknown request");
+                                tracing::warn!(
+                                    id=s.id.0,
+                                    url=%self.url,
+                                    "received sub confirmation for unknown request"
+                                );
                                 continue;
                             };
+                            tracing::debug!(
+                                id=s.id.0,
+                                url=%self.url,
+                                "received sub confirmation for pending request"
+                            );
+
                             self.request_to_subs.insert(s.id, s.result);
                             let tx = sub.tx;
                             let handle = SubscriptionHandle {
@@ -174,6 +191,11 @@ impl WebsocketConnection {
                 }
                 Ok(s) = self.requests_rx.recv_async() => {
                     let payload = s.payload.to_string();
+                    tracing::debug!(
+                        id=s.request_id.0,
+                        url=%self.url,
+                        "creating new subscription"
+                    );
                     self.inflights.insert(s.request_id, s);
                     if let Err(error) = self.sender.send(payload).await {
                         tracing::error!(url=%self.url, %error, "failed to send subscription request to websocket");
