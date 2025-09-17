@@ -41,9 +41,11 @@ use solana_pubkey::Pubkey;
 use solana_rpc_client_api::{
     config::{
         RpcAccountInfoConfig, RpcContextConfig, RpcProgramAccountsConfig, RpcSendTransactionConfig,
-        RpcTransactionConfig,
+        RpcSignaturesForAddressConfig, RpcTransactionConfig,
     },
-    response::{Response, RpcBlockhash, RpcResponseContext},
+    response::{
+        Response, RpcBlockhash, RpcConfirmedTransactionStatusWithSignature, RpcResponseContext,
+    },
 };
 use solana_transaction::{versioned::VersionedTransaction, Transaction};
 use solana_transaction_status_client_types::{
@@ -406,6 +408,14 @@ impl RoHttpRpcServer for MockServer {
             context: RpcResponseContext::new(0),
             value,
         })
+    }
+
+    async fn signatures_for_address(
+        &self,
+        _pubkey: SerdePubkey,
+        _config: Option<RpcSignaturesForAddressConfig>,
+    ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>> {
+        Ok(vec![])
     }
 }
 

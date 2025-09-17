@@ -19,12 +19,18 @@ use solana_account_decoder::{
 };
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
-use solana_rpc_client::{nonblocking::rpc_client::RpcClient, rpc_client::SerializableTransaction};
+use solana_rpc_client::{
+    nonblocking::rpc_client::RpcClient,
+    rpc_client::{GetConfirmedSignaturesForAddress2Config, SerializableTransaction},
+};
 use solana_rpc_client_api::{
     config::{
-        RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig, RpcTransactionConfig,
+        RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig,
+        RpcSignaturesForAddressConfig, RpcTransactionConfig,
     },
-    response::{Response, RpcBlockhash, RpcResponseContext},
+    response::{
+        Response, RpcBlockhash, RpcConfirmedTransactionStatusWithSignature, RpcResponseContext,
+    },
 };
 use solana_signature::Signature;
 use solana_transaction::{versioned::VersionedTransaction, Transaction};
@@ -314,6 +320,36 @@ impl RoHttpRpcServer for HttpServer {
             context: RpcResponseContext::new(slot),
             value,
         })
+    }
+
+    async fn signatures_for_address(
+        &self,
+        pubkey: SerdePubkey,
+        config: Option<RpcSignaturesForAddressConfig>,
+    ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>> {
+        let client = self.resolve_client(pubkey.0).await?;
+        let config = config.unwrap_or_default();
+        let before = if let Some(s) = config.before {
+            Some(Signature::from_str(&s).map_err(RouterError::decode_error)?)
+        } else {
+            None
+        };
+        let until = if let Some(s) = config.until {
+            Some(Signature::from_str(&s).map_err(RouterError::decode_error)?)
+        } else {
+            None
+        };
+        let config = GetConfirmedSignaturesForAddress2Config {
+            before,
+            until,
+            limit: config.limit,
+            commitment: config.commitment,
+        };
+        client
+            .get_signatures_for_address_with_config(&pubkey.0, config)
+            .await
+            .map_err(RouterError::from)
+            .map_err(Into::into)
     }
 }
 

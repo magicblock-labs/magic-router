@@ -554,3 +554,18 @@ async fn test_get_latest_blockhash() {
         .expect("failed to fetch latest blockhash from the router");
     assert_eq!(slot, 300, "router didn't return mock slot");
 }
+
+#[tokio::test]
+async fn test_get_signatures_for_address() {
+    let env = TestEnv::init().await;
+
+    let signatures = env
+        .router_client
+        .get_signatures_for_address_with_config(&Pubkey::new_unique(), Default::default())
+        .await
+        .expect("failed to fetch signatures for address from the router");
+    assert!(
+        signatures.is_empty(),
+        "the getSignaturesForAddress method is mocked"
+    )
+}
