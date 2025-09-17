@@ -173,12 +173,12 @@ impl DelegationsCache {
                 upstream: PubSubUpstreamKind::Chain,
             };
             let _ = self.dispatcher_tx.send(subscription).await;
+            tracing::debug!(
+                id = request_id.0,
+                %pda,
+                "cache coherence subscription sent for the account"
+            );
         }
-        tracing::debug!(
-            id = request_id.0,
-            %pda,
-            "cache coherence subscription sent for the account"
-        );
     }
 
     async fn updater(self: Arc<Self>, mut rx: Receiver<PubsubMessage>) {

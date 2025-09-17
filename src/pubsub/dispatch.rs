@@ -91,7 +91,10 @@ impl SubscriptionDispatcher {
                 }
                 Some(request) = self.requests_rx.recv() => {
                     let Some(tx) = self.upstreams.get_mut(&request.destination) else {
-                        tracing::warn!(url=%request.destination, "subscription request was sent for unknown upstream");
+                        tracing::warn!(
+                            url=%request.destination,
+                            "subscription request was sent for unknown upstream"
+                        );
                         continue;
                     };
                     if let Err(SendError(r)) = tx.send(request) {

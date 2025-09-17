@@ -18,7 +18,6 @@ pub enum RouterError {
     ConflictingDelegations,
 }
 
-// TODO @@@ implement errors
 impl From<RouterError> for ErrorObject<'_> {
     fn from(value: RouterError) -> Self {
         ErrorObject::owned::<()>(0, value.to_string(), None)
