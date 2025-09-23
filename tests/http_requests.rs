@@ -423,17 +423,12 @@ async fn test_get_blockhash_for_accounts() {
         .expect("getBlockhashForAccounts json contains invalid data, no hash was found");
 }
 
-#[ignore = "send_and_confirm_transaction uses blockhash related method which are not supported by the router"]
 #[tokio::test]
 async fn test_send_and_confirm_transaction() {
     let env = TestEnv::init().await;
+    let hash = env.router_client.get_latest_blockhash().await.unwrap();
 
-    let txn = transfer(
-        &Keypair::new(),
-        &Pubkey::new_unique(),
-        1000,
-        Hash::default(),
-    );
+    let txn = transfer(&Keypair::new(), &Pubkey::new_unique(), 1000, hash);
     let sig = txn.signatures[0];
     let result = env
         .router_client

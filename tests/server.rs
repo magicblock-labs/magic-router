@@ -36,6 +36,7 @@ use solana_account::{Account, ReadableAccount, WritableAccount};
 use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
 };
+use solana_commitment_config::CommitmentConfig;
 use solana_hash::Hash;
 use solana_pubkey::Pubkey;
 use solana_rpc_client_api::{
@@ -322,7 +323,7 @@ impl RoHttpRpcServer for MockServer {
                 Some(TransactionStatus {
                     slot: 0,
                     status: Ok(()),
-                    confirmations: Some(24),
+                    confirmations: None,
                     confirmation_status: Some(TransactionConfirmationStatus::Finalized),
                     err: None
                 });
@@ -349,6 +350,20 @@ impl RoHttpRpcServer for MockServer {
             block_time: None,
         };
         Ok(Some(Rc::new(txn)))
+    }
+
+    async fn is_blockhash_valid(
+        &self,
+        _hash: String,
+        _params: Option<CommitmentConfig>,
+    ) -> RpcResult<Response<bool>> {
+        return Ok(Response {
+            context: RpcResponseContext {
+                slot: 0,
+                api_version: None,
+            },
+            value: true,
+        });
     }
 
     async fn routes(&self) -> RpcResult<Vec<RouteInfo>> {
