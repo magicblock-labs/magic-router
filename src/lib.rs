@@ -67,10 +67,11 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         config.max_cached_delegations,
     );
 
+    let transactions = Arc::new(ForwardedTransactions::new(config.max_cached_transactions));
     let handler = HttpServer {
         delegations: delegations.clone(),
         routes: routes.clone(),
-        transactions: ForwardedTransactions::new(config.max_cached_transactions).into(),
+        transactions: transactions.clone(),
     };
     let mut rpc_module = RoHttpRpcServer::into_rpc(handler.clone());
     rpc_module
@@ -82,6 +83,7 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
                 delegations,
                 routes,
                 dispatcher_tx: requests_tx,
+                transactions,
             }
             .into_rpc(),
         )

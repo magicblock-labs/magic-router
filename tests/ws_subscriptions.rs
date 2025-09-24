@@ -1,6 +1,9 @@
 use futures::StreamExt;
 use router::accounts::DELEGATION_PROGRAM_STR;
+use solana_hash::Hash;
+use solana_keypair::Keypair;
 use solana_pubkey::Pubkey;
+use solana_system_transaction::transfer;
 
 mod common;
 
@@ -71,4 +74,38 @@ async fn test_account_subscribe() {
         response.value.lamports, 44,
         "account update from chain should contain latest update"
     );
+}
+
+#[tokio::test]
+async fn test_signature_subscribe() {
+    let mut env = common::TestEnv::init().await;
+
+    let owner = Pubkey::new_unique();
+    let pubkey = Pubkey::new_unique();
+    let er_identity = Pubkey::new_unique();
+
+    // spin up new mock ephemeral
+    env.add_route(er_identity).await;
+    let pubsub = env.router_pubsub.clone();
+
+    env.add_account(pubkey, owner);
+    env.delegate_account(pubkey, owner, er_identity).await;
+
+    let txn = transfer(
+        &Keypair::new(),
+        &Pubkey::new_unique(),
+        1000,
+        Hash::default(),
+    );
+    let sig = txn.signatures[0];
+    env.router_client
+        .send_transaction(&txn)
+        .await
+        .expect("failed to send transaction via router");
+    let mut sub = pubsub
+        .signature_subscribe(&sig, None)
+        .await
+        .expect("failed to subscribe to signature")
+        .0;
+    sub.next().await.expect("websocket stream has been closed");
 }

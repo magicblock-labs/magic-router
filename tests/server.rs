@@ -41,7 +41,7 @@ use solana_pubkey::Pubkey;
 use solana_rpc_client_api::{
     config::{
         RpcAccountInfoConfig, RpcContextConfig, RpcProgramAccountsConfig, RpcSendTransactionConfig,
-        RpcTransactionConfig,
+        RpcSignatureSubscribeConfig, RpcTransactionConfig,
     },
     response::{Response, RpcBlockhash, RpcResponseContext},
 };
@@ -453,6 +453,23 @@ impl WebsocketRpcServer for MockServer {
     ) -> SubscriptionResult {
         let sink = sink.accept().await?;
         let _ = self.account_subscriptions.insert(pubkey.0, sink);
+        Ok(())
+    }
+    async fn signature_subscribe(
+        &self,
+        sink: PendingSubscriptionSink,
+        _signature: String,
+        _params: Option<RpcSignatureSubscribeConfig>,
+    ) -> SubscriptionResult {
+        let sink = sink.accept().await?;
+        let id = sink.subscription_id();
+        let msg = SubscriptionMessage::new(
+            "signatureNotification",
+            id,
+            &self.response(json::json!({ "err": None::<()> })),
+        )
+        .unwrap();
+        sink.send(msg).await.unwrap();
         Ok(())
     }
 }

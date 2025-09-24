@@ -24,6 +24,7 @@ use tokio::{
 use url::Url;
 
 use crate::{
+    cache::transactions::RemoteHandle,
     pubsub::{
         dispatch::WsUpstreamState,
         notification::{deserialize_account, deserialize_field, PubsubMessage},
@@ -98,12 +99,15 @@ impl RoutingTable {
         Ok(this)
     }
 
-    pub fn ephemeral_client(&self, pubkey: &Pubkey) -> Option<Arc<RpcClient>> {
-        self.inner.get(pubkey).map(|e| e.get().client.clone())
+    pub fn ephemeral_client(&self, identity: &Pubkey) -> Option<Arc<RpcClient>> {
+        self.inner.get(identity).map(|e| e.get().client.clone())
     }
 
-    pub fn ephemeral_url(&self, pubkey: &Pubkey) -> Option<Arc<Url>> {
-        self.inner.get(pubkey).map(|e| e.get().ws_url.clone())
+    pub fn ephemeral_handle(&self, identity: &Pubkey) -> Option<RemoteHandle> {
+        self.inner.get(identity).map(|e| RemoteHandle {
+            rpc: e.client.clone(),
+            ws: e.ws_url.clone(),
+        })
     }
 
     pub fn base_chain(&self) -> &UpstreamRecord {

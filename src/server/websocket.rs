@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use json::JsonValueTrait;
 use jsonrpsee::{
@@ -6,16 +6,21 @@ use jsonrpsee::{
     PendingSubscriptionSink, SubscriptionMessage, SubscriptionSink,
 };
 use solana_pubkey::Pubkey;
-use solana_rpc_client_api::config::RpcAccountInfoConfig;
+use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcSignatureSubscribeConfig};
+use solana_signature::Signature;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
     accounts::DELEGATION_PROGRAM_STR,
-    cache::{delegations::DelegationsCache, routes::RoutingTable},
+    cache::{
+        delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
+    },
     error::RouterError,
     pubsub::{
         notification::{PubsubMessage, SubscriptionHandle},
-        subscription::{account_subscription_json, Subscription, Unsubscription},
+        subscription::{
+            account_subscription_json, signature_subscription_json, Subscription, Unsubscription,
+        },
         PubSubUpstreamKind,
     },
     rpc::websocket::WebsocketRpcServer,
@@ -32,6 +37,8 @@ pub struct WebsocketServer {
     pub routes: Arc<RoutingTable>,
     /// Channel endpoint to websocket subscriptions dispatcher
     pub dispatcher_tx: Sender<Subscription>,
+    /// Cache of recently forwared transaction signatures and their remote handles
+    pub transactions: Arc<ForwardedTransactions>,
 }
 
 #[async_trait]
@@ -50,9 +57,9 @@ impl WebsocketRpcServer for WebsocketServer {
             Some(validator) => {
                 let ephem = self
                     .routes
-                    .ephemeral_url(&validator)
+                    .ephemeral_handle(&validator)
                     .ok_or_else(|| RouterError::UnknownErNode(validator))?;
-                Some(ephem)
+                Some(ephem.ws)
             }
             None => None,
         };
@@ -73,21 +80,25 @@ impl WebsocketRpcServer for WebsocketServer {
         if let Some(sub) = ephem_subscription.clone() {
             let _ = self.dispatcher_tx.send(sub).await;
         }
-        let _ = self.dispatcher_tx.send(chain_subscription.clone()).await;
+        let _ = self.dispatcher_tx.send(chain_subscription).await;
         let confirmation = pubsub_rx.recv();
         let message = tokio::time::timeout(UPSTREAM_SUB_CONFIRMATION_TIMEOUT, confirmation)
             .await
             .map_err(|_| "upstream failed to confirm the subscription")?;
         let mut handles = HashMap::new();
         if let Some(PubsubMessage::Subscribed(handle)) = message {
-            tracing::debug!(id = handle.request_id.0, %pubkey, "account subscription has been confirmed");
+            tracing::debug!(
+                id = handle.request_id.0,
+                %pubkey,
+                "account subscription has been confirmed"
+            );
             handles.insert(handle.request_id, handle);
         } else {
-            Err("upstream failed to confirm the subscription")?;
+            Err("upstream failed to confirm the subscription for account")?;
         }
         let sink = pending.accept().await?;
 
-        let handler = SubscriptionHandler {
+        let handler = AccountSubscriptionHandler {
             pubkey,
             sink,
             subscriber_id,
@@ -102,10 +113,60 @@ impl WebsocketRpcServer for WebsocketServer {
         tokio::spawn(handler.run());
         Ok(())
     }
+
+    async fn signature_subscribe(
+        &self,
+        pending: PendingSubscriptionSink,
+        signature: String,
+        params: Option<RpcSignatureSubscribeConfig>,
+    ) -> SubscriptionResult {
+        let signature = Signature::from_str(&signature).map_err(RouterError::decode_error)?;
+        let Some(handle) = self.transactions.get(&signature).await else {
+            return Err(RouterError::UnknownTransaction(signature).into());
+        };
+        let (pubsub_tx, mut pubsub_rx) = mpsc::channel(1024);
+        let subscriber_id = SubscriberId::generate();
+        let request_id = RequestId::generate();
+        let payload = signature_subscription_json(request_id, signature, params);
+        let subscription = Subscription {
+            request_id,
+            subscriber_id,
+            payload,
+            tx: pubsub_tx.clone(),
+            destination: handle.ws,
+            upstream: PubSubUpstreamKind::Chain,
+        };
+        let _ = self.dispatcher_tx.send(subscription).await;
+        let confirmation = pubsub_rx.recv();
+        let message = tokio::time::timeout(UPSTREAM_SUB_CONFIRMATION_TIMEOUT, confirmation)
+            .await
+            .map_err(|_| "upstream failed to confirm the subscription")?;
+        let handle = if let Some(PubsubMessage::Subscribed(handle)) = message {
+            tracing::debug!(
+                id = handle.request_id.0,
+                %signature,
+                "signature subscription has been confirmed"
+            );
+            handle
+        } else {
+            return Err("upstream failed to confirm the subscription for signature".into());
+        };
+        let sink = pending.accept().await?;
+
+        let handler = SignatureSubscriptionHandler {
+            signature,
+            sink,
+            subscriber_id,
+            pubsub_rx,
+            handle,
+        };
+        tokio::spawn(handler.run());
+        Ok(())
+    }
 }
 
-/// Client subscription handler
-struct SubscriptionHandler {
+/// Account subscription handler
+struct AccountSubscriptionHandler {
     pubkey: Pubkey,
     subscriber_id: SubscriberId,
     sink: SubscriptionSink,
@@ -118,7 +179,15 @@ struct SubscriptionHandler {
     params: Option<RpcAccountInfoConfig>,
 }
 
-impl SubscriptionHandler {
+struct SignatureSubscriptionHandler {
+    subscriber_id: SubscriberId,
+    signature: Signature,
+    pubsub_rx: Receiver<PubsubMessage>,
+    sink: SubscriptionSink,
+    handle: SubscriptionHandle,
+}
+
+impl AccountSubscriptionHandler {
     /// Try to resubscribe to a different upstream in case
     /// of the account's delegation status has been changed
     async fn handle_delegation_status_change(
@@ -145,7 +214,7 @@ impl SubscriptionHandler {
             PubSubUpstreamKind::Chain => {
                 let authority = self.delegations.get_delegation_authority(self.pubkey).await;
                 if let Some(identity) = authority {
-                    let Some(destination) = self.routes.ephemeral_url(&identity) else {
+                    let Some(handle) = self.routes.ephemeral_handle(&identity) else {
                         tracing::warn!(
                             account=%self.pubkey, %identity,
                             "account has been redelegated to the unknown ER"
@@ -162,7 +231,7 @@ impl SubscriptionHandler {
                         subscriber_id,
                         payload,
                         tx: self.pubsub_tx.clone(),
-                        destination,
+                        destination: handle.ws,
                         upstream: PubSubUpstreamKind::Ephem,
                     };
                     let _ = self.dispatcher_tx.send(sub).await;
@@ -185,7 +254,7 @@ impl SubscriptionHandler {
     async fn run(mut self) {
         tracing::debug!(
             id = self.subscriber_id.0, pubkey=%self.pubkey,
-            "starting the client subscription handler"
+            "starting the account subscription handler"
         );
         loop {
             tokio::select! {
@@ -241,7 +310,7 @@ impl SubscriptionHandler {
                             );
                             let destination = match authority {
                                 Some(validator) => {
-                                    let Some(url) = self.routes.ephemeral_url(&validator) else {
+                                    let Some(handle) = self.routes.ephemeral_handle(&validator) else {
                                         tracing::warn!(
                                             account = %self.pubkey, %validator,
                                             "account has been delegated to the unknown ER"
@@ -249,7 +318,7 @@ impl SubscriptionHandler {
                                         continue;
 
                                     };
-                                    url
+                                    handle.ws
                                 }
                                 None => self.routes.base_chain().ws_url.clone(),
                             };
@@ -269,7 +338,63 @@ impl SubscriptionHandler {
         }
         tracing::debug!(
             id = self.subscriber_id.0,
-            "client websocket subscription handler has terminated",
+            pubkey = %self.pubkey,
+            "account websocket subscription handler has terminated",
+        );
+    }
+}
+
+impl SignatureSubscriptionHandler {
+    async fn run(mut self) {
+        tracing::debug!(
+            signature=%self.signature,
+            "starting the signature subscription handler"
+        );
+        let mut receive_timeout = tokio::time::interval(Duration::from_secs(60));
+        receive_timeout.tick().await;
+        tokio::select! {
+            _ = self.sink.closed() => {
+                tracing::debug!(
+                    id=self.subscriber_id.0,
+                    "terminating client subscription handler"
+                );
+                let unsub = Unsubscription {
+                    request_id: self.handle.request_id,
+                    subscriber_id: self.subscriber_id,
+                    method: "signatureUnsubscribe",
+                };
+                if let Err(error) = self.handle.unsub.send(unsub).await {
+                    tracing::warn!(
+                        %error,
+                        id = self.subscriber_id.0,
+                        "failed to send an unsubscribe request from \
+                        the signature subscription handler"
+                    );
+                }
+
+            }
+            Some(msg) = self.pubsub_rx.recv() => {
+                if let PubsubMessage::Notification { payload, ..} = msg {
+                    let Ok(msg) = SubscriptionMessage::new(
+                        "signatureNotification",
+                        self.sink.subscription_id(),
+                        &payload
+                    ) else {
+                        tracing::warn!("failed to serialize json value, should never happen");
+                        return;
+                    };
+                    if self.sink.send(msg).await.is_err() {
+                        tracing::debug!("websocket sink for subscription has been closed");
+                    }
+                }
+            }
+            _ = receive_timeout.tick() => {}
+        }
+
+        tracing::debug!(
+            id = self.subscriber_id.0,
+            signature = %self.signature,
+            "signature websocket subscription handler has terminated",
         );
     }
 }

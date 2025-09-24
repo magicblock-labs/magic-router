@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use solana_pubkey::Pubkey;
-use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcProgramAccountsConfig};
+use solana_rpc_client_api::config::{
+    RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcSignatureSubscribeConfig,
+};
+use solana_signature::Signature;
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
@@ -55,6 +58,23 @@ pub fn account_subscription_json(
         "method": "accountSubscribe",
         "params": [
             SerdePubkey(pubkey),
+            params
+        ]
+    })
+}
+
+#[inline(always)]
+pub fn signature_subscription_json(
+    id: RequestId,
+    signature: Signature,
+    params: Option<RpcSignatureSubscribeConfig>,
+) -> json::Value {
+    json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "signatureSubscribe",
+        "params": [
+            signature.to_string(),
             params
         ]
     })
