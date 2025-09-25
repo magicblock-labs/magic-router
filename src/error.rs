@@ -15,6 +15,8 @@ pub enum RouterError {
     UnknownErNode(Pubkey),
     #[error("transaction with given signature has never been encountered: {0}")]
     UnknownTransaction(Signature),
+    #[error("timeout trying to confirm subscription: {0}")]
+    SubscriptionTimetout(&'static str),
     #[error("failed to decode request parameters: {0}")]
     DecodeError(Box<dyn std::error::Error + 'static>),
     #[error("transaction contains accounts that were delegated to different ER nodes")]
@@ -23,7 +25,7 @@ pub enum RouterError {
 
 impl From<RouterError> for ErrorObject<'_> {
     fn from(value: RouterError) -> Self {
-        ErrorObject::owned::<()>(0, value.to_string(), None)
+        ErrorObject::owned::<()>(-32604, value.to_string(), None)
     }
 }
 

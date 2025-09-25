@@ -3,6 +3,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use json::JsonValueTrait;
 use jsonrpsee::{
     core::{async_trait, SubscriptionResult},
+    types::ErrorObject,
     PendingSubscriptionSink, SubscriptionMessage, SubscriptionSink,
 };
 use solana_pubkey::Pubkey;
@@ -120,9 +121,13 @@ impl WebsocketRpcServer for WebsocketServer {
         signature: String,
         params: Option<RpcSignatureSubscribeConfig>,
     ) -> SubscriptionResult {
+        let sink = pending.accept().await?;
         let signature = Signature::from_str(&signature).map_err(RouterError::decode_error)?;
         let Some(handle) = self.transactions.get(&signature).await else {
-            return Err(RouterError::UnknownTransaction(signature).into());
+            let error = RouterError::UnknownTransaction(signature);
+            let msg = SubscriptionMessage::from_json(&ErrorObject::from(error))?;
+            sink.send(msg).await?;
+            return Ok(());
         };
         let (pubsub_tx, mut pubsub_rx) = mpsc::channel(1024);
         let subscriber_id = SubscriberId::generate();
@@ -138,9 +143,13 @@ impl WebsocketRpcServer for WebsocketServer {
         };
         let _ = self.dispatcher_tx.send(subscription).await;
         let confirmation = pubsub_rx.recv();
-        let message = tokio::time::timeout(UPSTREAM_SUB_CONFIRMATION_TIMEOUT, confirmation)
-            .await
-            .map_err(|_| "upstream failed to confirm the subscription")?;
+        let result = tokio::time::timeout(UPSTREAM_SUB_CONFIRMATION_TIMEOUT, confirmation).await;
+        let Ok(message) = result else {
+            let error = RouterError::SubscriptionTimetout("signatureSubscribe");
+            let msg = SubscriptionMessage::from_json(&ErrorObject::from(error))?;
+            sink.send(msg).await?;
+            return Ok(());
+        };
         let handle = if let Some(PubsubMessage::Subscribed(handle)) = message {
             tracing::debug!(
                 id = handle.request_id.0,
@@ -149,9 +158,11 @@ impl WebsocketRpcServer for WebsocketServer {
             );
             handle
         } else {
-            return Err("upstream failed to confirm the subscription for signature".into());
+            let error = RouterError::SubscriptionTimetout("signatureSubscribe");
+            let msg = SubscriptionMessage::from_json(&ErrorObject::from(error))?;
+            sink.send(msg).await?;
+            return Ok(());
         };
-        let sink = pending.accept().await?;
 
         let handler = SignatureSubscriptionHandler {
             signature,
