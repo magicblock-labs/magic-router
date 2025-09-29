@@ -73,7 +73,7 @@ impl WebsocketConnection {
     }
 
     pub async fn run(mut self) {
-        let mut ping = tokio::time::interval(Duration::from_secs(5));
+        let mut ping = tokio::time::interval(Duration::from_secs(30));
         loop {
             tokio::select! {
                 Some(data) = self.receiver.recv() => {

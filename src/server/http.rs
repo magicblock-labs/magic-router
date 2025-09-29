@@ -364,7 +364,7 @@ impl RwHttpRpcServer for HttpServer {
                 Err(RouterError::ConflictingDelegations)?;
             }
         }
-        tracing::debug!(?delegation, "delegation status of transaction accounts");
+        tracing::debug!(?delegation, "transaction accounts have");
         let client = match delegation {
             Some(identity) => self
                 .routes
