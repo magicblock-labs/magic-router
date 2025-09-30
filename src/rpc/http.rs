@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use solana_account_decoder::{parse_token::UiTokenAmount, UiAccount};
+use solana_commitment_config::CommitmentConfig;
 use solana_epoch_info::EpochInfo;
 use solana_epoch_schedule::{
     EpochSchedule, DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET, MINIMUM_SLOTS_PER_EPOCH,
@@ -63,6 +64,13 @@ pub trait RoHttpRpc {
         signature: String,
         params: Option<RpcTransactionConfig>,
     ) -> RpcResult<Option<Rc<EncodedConfirmedTransactionWithStatusMeta>>>;
+
+    #[method(name = "isBlockhashValid")]
+    async fn is_blockhash_valid(
+        &self,
+        hash: String,
+        params: Option<CommitmentConfig>,
+    ) -> RpcResult<Response<bool>>;
 
     #[method(name = "getRoutes")]
     async fn routes(&self) -> RpcResult<Vec<RouteInfo>>;
