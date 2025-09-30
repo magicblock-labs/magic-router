@@ -63,9 +63,9 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
     .await?;
 
     let delegations = DelegationsCache::new(
-        requests_tx.clone(),
         routes.clone(),
         config.max_cached_delegations,
+        config.laser_stream,
     );
 
     let handler = HttpServer {

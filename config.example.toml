@@ -25,6 +25,11 @@ max-subscriptions-per-connection = 1024
 # Frequency of ping requests, performed to upstream nodes, to determine their proximity (latency wise)
 proximity-ping-frequency-sec = 30
 
+# Configuration for Helius laser stream (to keep track of delegations)
+[laser-stream]
+endpoint = "https://laserstream-dev.helius-rpc.com"
+api-key = "3bf47f8b-a653-4e8c-b35b-c07af6f6039c"
+
 # WebSocket connection configuration
 [websocket]
 # The interval in seconds for sending ping messages to maintain WebSocket connections.
