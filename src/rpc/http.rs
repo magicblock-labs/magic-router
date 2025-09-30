@@ -2,15 +2,17 @@ use std::rc::Rc;
 
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use solana_account_decoder::{parse_token::UiTokenAmount, UiAccount};
+use solana_commitment_config::CommitmentConfig;
 use solana_epoch_info::EpochInfo;
 use solana_epoch_schedule::{
     EpochSchedule, DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET, MINIMUM_SLOTS_PER_EPOCH,
 };
 use solana_rpc_client_api::{
     config::{
-        RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig, RpcTransactionConfig,
+        RpcAccountInfoConfig, RpcContextConfig, RpcSendTransactionConfig,
+        RpcSignaturesForAddressConfig, RpcTransactionConfig,
     },
-    response::{Response, RpcBlockhash},
+    response::{Response, RpcBlockhash, RpcConfirmedTransactionStatusWithSignature},
 };
 use solana_transaction_status_client_types::{
     EncodedConfirmedTransactionWithStatusMeta, TransactionStatus,
@@ -64,8 +66,19 @@ pub trait RoHttpRpc {
         params: Option<RpcTransactionConfig>,
     ) -> RpcResult<Option<Rc<EncodedConfirmedTransactionWithStatusMeta>>>;
 
-    #[method(name = "getRoutes")]
-    async fn routes(&self) -> RpcResult<Vec<RouteInfo>>;
+    #[method(name = "getSignaturesForAddress")]
+    async fn signatures_for_address(
+        &self,
+        pubkey: SerdePubkey,
+        config: Option<RpcSignaturesForAddressConfig>,
+    ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>>;
+
+    #[method(name = "isBlockhashValid")]
+    async fn is_blockhash_valid(
+        &self,
+        hash: String,
+        params: Option<CommitmentConfig>,
+    ) -> RpcResult<Response<bool>>;
 
     #[method(name = "getBlockhashForAccounts")]
     async fn blockhash_for_accounts(&self, accounts: Vec<SerdePubkey>) -> RpcResult<RpcBlockhash>;
@@ -97,6 +110,9 @@ pub trait RoHttpRpc {
             transaction_count: None,
         })
     }
+
+    #[method(name = "getRoutes")]
+    async fn routes(&self) -> RpcResult<Vec<RouteInfo>>;
 
     #[method(name = "getDelegationStatus")]
     async fn delegation_status(&self, pubkey: SerdePubkey) -> RpcResult<DelegationStatus>;
