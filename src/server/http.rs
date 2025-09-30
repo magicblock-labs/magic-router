@@ -42,7 +42,9 @@ use solana_transaction_status_client_types::{
 
 use crate::{
     cache::{
-        delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
+        delegations::DelegationsCache,
+        routes::RoutingTable,
+        transactions::{ForwardedTransactions, RemoteHandle},
     },
     error::RouterError,
     rpc::http::{RoHttpRpcServer, RwHttpRpcServer},
@@ -244,6 +246,7 @@ impl RoHttpRpcServer for HttpServer {
             });
         };
         client
+            .rpc
             .get_signature_statuses(&signatures)
             .await
             .map_err(RouterError::from)
@@ -261,6 +264,7 @@ impl RoHttpRpcServer for HttpServer {
             return Ok(None);
         };
         client
+            .rpc
             .get_transaction_with_config(&signature, params.unwrap_or_default())
             .await
             .map_err(RouterError::from)
@@ -426,21 +430,26 @@ impl RwHttpRpcServer for HttpServer {
             }
         }
         tracing::debug!(?delegation, "transaction accounts have");
-        let client = match delegation {
+        let handle = match delegation {
             Some(identity) => self
                 .routes
-                .ephemeral_client(&identity)
+                .ephemeral_handle(&identity)
                 .ok_or_else(|| RouterError::UnknownErNode(identity))?,
-            None => self.routes.base_chain().client.clone(),
+            None => {
+                let upstream = self.routes.base_chain();
+                RemoteHandle {
+                    rpc: upstream.client.clone(),
+                    ws: upstream.ws_url.clone(),
+                }
+            }
         };
-        self.transactions
-            .track(*txn.get_signature(), client.clone())
-            .await;
-        client
+        let result = handle
+            .rpc
             .send_transaction_with_config(&txn, params)
             .await
             .map_err(RouterError::from)
-            .map_err(Into::into)
-            .map(|s| s.to_string())
+            .map(|s| s.to_string())?;
+        self.transactions.track(*txn.get_signature(), handle).await;
+        Ok(result)
     }
 }

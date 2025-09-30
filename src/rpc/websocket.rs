@@ -1,5 +1,5 @@
 use jsonrpsee::{core::SubscriptionResult, proc_macros::rpc};
-use solana_rpc_client_api::config::RpcAccountInfoConfig;
+use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcSignatureSubscribeConfig};
 
 use crate::types::SerdePubkey;
 
@@ -10,5 +10,12 @@ pub trait WebsocketRpc {
         &self,
         pubkey: SerdePubkey,
         params: Option<RpcAccountInfoConfig>,
+    ) -> SubscriptionResult;
+
+    #[subscription(name = "signatureSubscribe", unsubscribe = "signatureUnsubscribe", item = json::Value)]
+    async fn signature_subscribe(
+        &self,
+        signature: String,
+        params: Option<RpcSignatureSubscribeConfig>,
     ) -> SubscriptionResult;
 }
