@@ -11,6 +11,7 @@ use rpc::{
     http::{RoHttpRpcServer, RwHttpRpcServer},
     websocket::WebsocketRpcServer,
 };
+use scc::HashCache;
 use server::{http::HttpServer, websocket::WebsocketServer};
 use tokio::sync::{mpsc, Notify};
 
@@ -71,6 +72,7 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         delegations: delegations.clone(),
         routes: routes.clone(),
         transactions: ForwardedTransactions::new(config.max_cached_transactions).into(),
+        blockhashes: HashCache::with_capacity(2048, 16384).into(),
     };
     let mut rpc_module = RoHttpRpcServer::into_rpc(handler.clone());
     rpc_module

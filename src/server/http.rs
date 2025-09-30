@@ -14,10 +14,12 @@ use jsonrpsee::{
     core::{async_trait, RpcResult},
     types::ErrorObjectOwned,
 };
+use scc::HashCache;
 use solana_account_decoder::{
     encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
 };
 use solana_commitment_config::CommitmentConfig;
+use solana_hash::Hash;
 use solana_pubkey::Pubkey;
 use solana_rpc_client::{
     nonblocking::rpc_client::RpcClient,
@@ -33,7 +35,7 @@ use solana_rpc_client_api::{
     },
 };
 use solana_signature::Signature;
-use solana_transaction::{versioned::VersionedTransaction, Transaction};
+use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_status_client_types::{
     EncodedConfirmedTransactionWithStatusMeta, TransactionStatus, UiTransactionEncoding,
 };
@@ -48,6 +50,8 @@ use crate::{
     RouterResult,
 };
 
+type BlockhashCache = Arc<HashCache<Hash, Arc<RpcClient>>>;
+
 /// Http server implementation for handling solana JSON-RPC requests
 #[derive(Clone)]
 pub struct HttpServer {
@@ -57,6 +61,8 @@ pub struct HttpServer {
     pub routes: Arc<RoutingTable>,
     /// Fixed capacity cache of transactions, sent through the router
     pub transactions: Arc<ForwardedTransactions>,
+    /// Fixed capacity cache of blockhashes, requested through the router
+    pub blockhashes: BlockhashCache,
 }
 
 impl HttpServer {
@@ -250,6 +256,7 @@ impl RoHttpRpcServer for HttpServer {
         params: Option<RpcTransactionConfig>,
     ) -> RpcResult<Option<Rc<EncodedConfirmedTransactionWithStatusMeta>>> {
         let signature = Signature::from_str(&signature).map_err(RouterError::decode_error)?;
+
         let Some(client) = self.transactions.get(&signature).await else {
             return Ok(None);
         };
@@ -259,6 +266,27 @@ impl RoHttpRpcServer for HttpServer {
             .map_err(RouterError::from)
             .map_err(Into::into)
             .map(|t| Some(Rc::new(t)))
+    }
+
+    async fn is_blockhash_valid(
+        &self,
+        hash: String,
+        params: Option<CommitmentConfig>,
+    ) -> RpcResult<Response<bool>> {
+        let hash = Hash::from_str(&hash).map_err(RouterError::decode_error)?;
+        let mut response = Response {
+            context: RpcResponseContext::new(0),
+            value: false,
+        };
+        let Some(client) = self.blockhashes.get_async(&hash).await else {
+            return Ok(response);
+        };
+        let commitment = params.unwrap_or_default();
+        response.value = client
+            .is_blockhash_valid(&hash, commitment)
+            .await
+            .map_err(RouterError::from)?;
+        Ok(response)
     }
 
     async fn routes(&self) -> RpcResult<Vec<RouteInfo>> {
@@ -290,6 +318,7 @@ impl RoHttpRpcServer for HttpServer {
             .get_latest_blockhash_with_commitment(CommitmentConfig::confirmed())
             .await
             .map_err(RouterError::from)?;
+        let _ = self.blockhashes.put_async(hash, client.clone()).await;
         let response = RpcBlockhash {
             blockhash: hash.to_string(),
             last_valid_block_height: slot,
@@ -312,6 +341,7 @@ impl RoHttpRpcServer for HttpServer {
             .get_latest_blockhash_with_commitment(CommitmentConfig::confirmed())
             .await
             .map_err(RouterError::from)?;
+        let _ = self.blockhashes.put_async(hash, client.clone()).await;
         let value = RpcBlockhash {
             blockhash: hash.to_string(),
             last_valid_block_height: slot + 150,
@@ -377,13 +407,8 @@ impl RwHttpRpcServer for HttpServer {
                 ))
             }
         };
-        let txn = if let Ok(txn) = bincode::deserialize::<VersionedTransaction>(&txn) {
-            txn
-        } else {
-            bincode::deserialize::<Transaction>(&txn)
-                .map(VersionedTransaction::from)
-                .map_err(RouterError::decode_error)?
-        };
+        let txn = bincode::deserialize::<VersionedTransaction>(&txn)
+            .map_err(RouterError::decode_error)?;
         let mut delegation = None;
         for (i, pk) in txn.message.static_account_keys().iter().enumerate() {
             if !txn.message.is_maybe_writable(i, None) {
