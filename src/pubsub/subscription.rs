@@ -5,7 +5,7 @@ use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcProgramAccountsConf
 use tokio::sync::mpsc::Sender;
 use url::Url;
 
-use crate::types::{RequestId, SerdePubkey, SubscriberId, UniqueId};
+use crate::types::{RequestId, SerdePubkey, SubscriberId};
 
 use super::{notification::PubsubMessage, PubSubUpstreamKind};
 
@@ -29,7 +29,6 @@ impl Subscription {
     pub fn clone_with_destination(&self, url: Arc<Url>) -> Self {
         let mut clone = self.clone();
         clone.destination = url;
-        clone.request_id = RequestId::generate();
         clone
     }
 }

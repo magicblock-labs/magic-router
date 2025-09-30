@@ -1,11 +1,10 @@
 use std::{
-    net::IpAddr,
     str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use borsh::BorshDeserialize;
@@ -47,10 +46,6 @@ pub struct RoutingTable {
     dispatcher_tx: Sender<Subscription>,
     /// Channel endpoint to send websocket updates on routes back to routes manager
     upstream_state_tx: Sender<WsUpstreamState>,
-    /// Shared client, to perform ICMP V4 ping request simultaneously to multiple upstream nodes
-    ping_client_v4: Arc<ping::Client>,
-    /// Shared client, to perform ICMP V6 ping request simultaneously to multiple upstream nodes
-    ping_client_v6: Arc<ping::Client>,
 }
 
 impl RoutingTable {
@@ -61,13 +56,13 @@ impl RoutingTable {
         proximity_ping_frequency: u64,
         ready: Arc<Notify>,
     ) -> RouterResult<Arc<Self>> {
-        let upstreams = base_chain_urls
-            .into_iter()
-            .map(|url| {
-                UpstreamRecord::new_from_url(url, None)
-                    .expect("invalid base chain url was provided")
-            })
-            .collect::<Vec<_>>();
+        let mut upstreams = Vec::with_capacity(base_chain_urls.len());
+        for url in base_chain_urls {
+            let record = UpstreamRecord::new_from_url(url, None)
+                .await
+                .expect("invalid base chain url was provided");
+            upstreams.push(record);
+        }
 
         for u in upstreams.iter() {
             let _ = upstream_state_tx
@@ -89,12 +84,6 @@ impl RoutingTable {
             base_chain,
             dispatcher_tx,
             upstream_state_tx,
-            ping_client_v4: ping::Client::new(&Default::default())?.into(),
-            ping_client_v6: ping::Client::new(&ping::Config {
-                kind: ping::ICMP::V6,
-                ..Default::default()
-            })?
-            .into(),
         });
         let accounts = this
             .base_chain()
@@ -167,7 +156,7 @@ impl RoutingTable {
             return;
         };
 
-        let Some(upstream) = UpstreamRecord::new_from_er_record(&record) else {
+        let Some(upstream) = UpstreamRecord::new_from_er_record(&record).await else {
             tracing::warn!(%pubkey, "domain registry account didn't have proper FQDN");
             return;
         };
@@ -215,7 +204,6 @@ impl RoutingTable {
         let mut ping_ticker = time::interval(Duration::from_secs(proximity_ping_frequency));
         let mut pings = FuturesUnordered::new();
 
-        let mut ping_id = 0u16;
         loop {
             tokio::select! {
                     Some(msg) = rx.recv() => {
@@ -259,25 +247,27 @@ impl RoutingTable {
                         let Some(mut record) = self.inner.get(&pubkey) else {
                             continue;
                         };
-                        record.get_mut().proximity_micros = duration.as_micros() as u64;
-                        tracing::info!("ping to {} took {}ms", record.ip, record.proximity_micros);
+
+                        let record = record.get_mut();
+                        let last = duration.as_micros() as u64;
+                        if record.proximity_micros == u64::MAX {
+                            record.proximity_micros = last;
+                        } else {
+                            record.proximity_micros =
+                                ((record.proximity_micros * 85) + last * 15) / 100;
+                        }
+                        let host =  record.ws_url.host_str().unwrap_or_default();
+                        tracing::info!(
+                            "ping to {host} took {last}μs, avg: {}μs",
+                            record.proximity_micros
+                        );
                     }
                     _ = ping_ticker.tick() => {
                         self.inner.scan(|&pubkey, record| {
-                            ping_id = ping_id.wrapping_add(1);
-                            let addr = record.ip;
-                            let client = if addr.is_ipv4() {
-                                self.ping_client_v4.clone()
-                            } else {
-                                self.ping_client_v6.clone()
-                            };
-                            tracing::debug!("pinging {addr}");
+                            let client = record.client.clone();
                             let task = async move {
-                                let mut pinger = client.pinger(addr, ping_id.into()).await;
-                                pinger
-                                    .ping(ping_id.into(), b"")
-                                    .await
-                                    .map(|(_, dur)| (pubkey, dur))
+                                let start = Instant::now();
+                                client.get_identity().await.map(|_| (pubkey, start.elapsed()))
                             };
                             pings.push(task);
                         });
@@ -299,31 +289,28 @@ struct BaseChainUpstreams {
 pub struct UpstreamRecord {
     pub client: Arc<RpcClient>,
     pub ws_url: Arc<Url>,
-    pub ip: IpAddr,
     pub proximity_micros: u64,
     pub info: Option<RouteInfo>,
 }
 
 impl UpstreamRecord {
-    fn new_from_url(mut fqdn: Url, info: Option<RouteInfo>) -> Option<Self> {
+    async fn new_from_url(mut fqdn: Url, info: Option<RouteInfo>) -> Option<Self> {
         let client = Arc::new(RpcClient::new(fqdn.to_string()));
-        let port = fqdn.port_or_known_default();
+        client.get_identity().await.ok()?;
         let scheme = if fqdn.scheme() == "https" {
             "wss"
         } else {
             "ws"
         };
         fqdn.set_scheme(scheme).ok()?;
-        let ip = fqdn.socket_addrs(|| port).ok()?.first()?.ip();
         Some(UpstreamRecord {
             client,
             ws_url: Arc::new(fqdn),
             proximity_micros: u64::MAX,
-            ip,
             info,
         })
     }
-    fn new_from_er_record(er_record: &ErRecord) -> Option<Self> {
+    async fn new_from_er_record(er_record: &ErRecord) -> Option<Self> {
         let fqdn = er_record.addr();
         let Ok(fqdn) = Url::parse(fqdn) else {
             tracing::warn!(
@@ -333,6 +320,6 @@ impl UpstreamRecord {
             return None;
         };
         let info = RouteInfo::from(er_record);
-        Self::new_from_url(fqdn, Some(info))
+        Self::new_from_url(fqdn, Some(info)).await
     }
 }
