@@ -1,5 +1,7 @@
 /target
-
+.idea
+.claude
+config.toml
 
 # Added by cargo
 #
