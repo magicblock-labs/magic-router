@@ -57,7 +57,7 @@ flume = "0.11"
 # networking
 url = { version = "2.5", features = ["serde"] }
 ping = { version = "0.8", package = "surge-ping" }
-helius-laserstream = "0.0.9"
+helius-laserstream = "0.1.3"
 
 # containers 
 scc = "2.2"
