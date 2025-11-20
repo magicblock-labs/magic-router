@@ -33,18 +33,19 @@ validator given its public key. This is achieved through an on-chain database
 of ER nodes, which the router accesses to map identities to FQDNs. Updates to
 this database are propagated to the router via a WebSocket subscription.
 
-## Supported HTTP Requests
+## Supported Requests
 
 Given the ephemeral nature of rollups, not all requests from the Solana RPC
 specification are supported. The router supports a select subset of these
 requests:
 
+### HTTP
+
 1. [getAccountInfo](https://solana.com/docs/rpc/http/getaccountinfo)
 2. [getMultipleAccounts](https://solana.com/docs/rpc/http/getmultipleaccounts)
 3. [getBalance](https://solana.com/docs/rpc/http/getbalance)
 4. [getTokenAccountBalance](https://solana.com/docs/rpc/http/gettokenaccountbalance)
-5. [getIdentity](https://solana.com/docs/rpc/http/getidentity), this method is
-   used to return an identity of the ER validator which is closest to the
+5. [getIdentity](https://solana.com/docs/rpc/http/getidentity), this method is used to return an identity of the ER validator which is closest to the
    router, latency wise.
 6. [sendTransaction](https://solana.com/docs/rpc/http/sendtransaction) - the
    sent transaction is parsed to extract all the explicitly referenced
@@ -54,29 +55,35 @@ requests:
    return an error. The matched route for the transaction signature will linger
    in the router for a while, so, methods like `getSignatureStatuses` or
    `getTransaction` can be routed to the same upstream
-7. [getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) - only 
+7. [getTransaction](https://solana.com/docs/rpc/http/gettransaction) - only
    makes sense for transactions which were recently sent through the router
-8. [getTransaction](https://solana.com/docs/rpc/http/gettransaction) - only
-   makes sense for transactions which were recently sent through the router
-9. [getFirstAvailableBlock](https://solana.com/docs/rpc/http/getfirstavailableblock) - dummy 
-   method used primarily for compatibility with solana explorer, the returned
-   value should not be used for any decision making
-10. [getEpochSchedule](https://solana.com/docs/rpc/http/getEpochSchedule) -
-    dummy 
-   method used primarily for compatibility with solana explorer, the returned
-   value should not be used for any decision making
-11. [getEpochInfo](https://solana.com/docs/rpc/http/getEpochInfo) - dummy
+8. [getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) - only makes sense for transactions which were recently sent through the router
+9. [getSignaturesForAddress](https://solana.com/docs/rpc/http/getsignaturesforaddress) -
+10. [getFirstAvailableBlock](https://solana.com/docs/rpc/http/getfirstavailableblock) - dummy
     method used primarily for compatibility with solana explorer, the returned
-   value should not be used for any decision making
+    value should not be used for any decision making
+11. [isBlockhashValid](https://solana.com/docs/rpc/http/isblockhashvalid)
 12. [getLatestBlockHash](https://solana.com/docs/rpc/http/getlatestblockhash) -
     a best effort method which returns the blockhash from the closest ER node.
     Note, if the network topology changes, the closest ER along with it, then
     it will cause transactions signed with the given blockhash to fail, as it
     was obtained from the wrong ER
+13. [getEpochSchedule](https://solana.com/docs/rpc/http/getEpochSchedule) -
+    dummy
+    method used primarily for compatibility with solana explorer, the returned
+    value should not be used for any decision making
+14. [getEpochInfo](https://solana.com/docs/rpc/http/getEpochInfo) - dummy
+    method used primarily for compatibility with solana explorer, the returned
+    value should not be used for any decision making
+
+### Websocket
+
+1. [signatureSubscribe](https://solana.com/docs/rpc/websocket/signaturesubscribe) - any transaction processed by the router is temporarily retained together with the upstream metadata that was used to forward it. This same upstream metadata is then reused when forwarding subscription updates.
 
 ### Custom Methods
+
 There're also a few methods which are unique to the router, and as a result
-they go beyond the solana JSON RPC API spec
+they go beyond the Solana JSON RPC API spec.
 
 1. **getRoutes** - a custom method to query all the ER nodes known to the
    router
@@ -92,11 +99,14 @@ they go beyond the solana JSON RPC API spec
 
 ## API Documentation
 
+Find details on API documentation on [official MagicBlock documentation] (https://docs.magicblock.gg/api-reference/).
+
 ### getRoutes
 
 Returns information about all Ephemeral Rollup (ER) nodes known to the router.
 
 **Example Request:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -106,6 +116,7 @@ Returns information about all Ephemeral Rollup (ER) nodes known to the router.
 ```
 
 **Example Response:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -130,6 +141,7 @@ Returns information about all Ephemeral Rollup (ER) nodes known to the router.
 ```
 
 **Response Fields:**
+
 - `identity` (string): The public key of the ER validator
 - `fqdn` (string): Fully qualified domain name of the ER node
 - `baseFee` (number): Base fee in lamports for transactions on this ER
@@ -141,6 +153,7 @@ Returns information about all Ephemeral Rollup (ER) nodes known to the router.
 Returns the latest blockhash for a list of accounts. This method is necessary in order to abstract away the splitting in the frontend.
 
 **Example Request:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -156,6 +169,7 @@ Returns the latest blockhash for a list of accounts. This method is necessary in
 ```
 
 **Example Response:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -168,23 +182,28 @@ Returns the latest blockhash for a list of accounts. This method is necessary in
 ```
 
 **Response Fields:**
+
 - `blockhash` (string): The latest blockhash as a base58-encoded string
 - `lastValidBlockHeight` (number): The block height at which this blockhash expires
 
 **Behavior:**
+
 - If all accounts are **undelegated**: Returns the blockhash from the base chain
 - If all accounts are **delegated to the same ER**: Returns the blockhash from that ER
 - If accounts are **delegated to different ERs**: Returns an error (conflicting delegations)
 - If **no accounts are provided**: Returns the blockhash from the base chain
 
 **Error Cases:**
+
 - `ConflictingDelegations`: When accounts are delegated to different ER nodes
 - `UnknownErNode`: When an ER node is not found in the routing table
 
 ### getDelegationStatus
-Returns the delegation status along with ER record for the given account 
+
+Returns the delegation status along with ER record for the given account
 
 **Example Request:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -194,8 +213,8 @@ Returns the delegation status along with ER record for the given account
 }
 ```
 
-
 **Example Response 1:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -205,7 +224,9 @@ Returns the delegation status along with ER record for the given account
   }
 }
 ```
+
 **Example Response 2:**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -223,14 +244,16 @@ Returns the delegation status along with ER record for the given account
 ```
 
 **Response Fields:**
-- `isDelegated` (bool): flag indicating whether the account is delegated 
+
+- `isDelegated` (bool): flag indicating whether the account is delegated
 - `delegationRecord` (object): the parsed delegation record for the delegated account (not present for non-delegated accounts)
-    - `authority` (string): the ER identity (authority), which was used to delegated the account to
-    - `owner` (string): the original owner of the delegated account
-    - `delegationSlot` (number): base chain slot, at which the account has been delegated 
-    - `lamports` (number): base chain balance of the account, recorded at the moment of delegation
+  - `authority` (string): the ER identity (authority), which was used to delegated the account to
+  - `owner` (string): the original owner of the delegated account
+  - `delegationSlot` (number): base chain slot, at which the account has been delegated
+  - `lamports` (number): base chain balance of the account, recorded at the moment of delegation
 
 **Error Cases:**
+
 - `UnknownErNode`: When an ER node is not found in the routing table
 
 ## Supported WebSocket Subscriptions
@@ -268,7 +291,7 @@ base-chain-urls = ["https://api.devnet.solana.com"]
 
 # Maximum delegation cache entries.
 max-cached-delegations = 1000
-# Maximum number of transaction to route mappings to keep in memory 
+# Maximum number of transaction to route mappings to keep in memory
 max-cached-transactions = 16384
 
 # Maximum simultaneous connections the router can handle.
@@ -304,4 +327,3 @@ magicblock-rpc-router config.toml
 ```
 
 The service will initiate and begin accepting connections.
-
