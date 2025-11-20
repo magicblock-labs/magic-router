@@ -58,7 +58,7 @@ requests:
 7. [getTransaction](https://solana.com/docs/rpc/http/gettransaction) - only
    makes sense for transactions which were recently sent through the router
 8. [getSignatureStatuses](https://solana.com/docs/rpc/http/getsignaturestatuses) - only makes sense for transactions which were recently sent through the router
-9. [getSignaturesForAddress](https://solana.com/docs/rpc/http/getsignaturesforaddress) -
+9. [getSignaturesForAddress](https://solana.com/docs/rpc/http/getsignaturesforaddress)
 10. [getFirstAvailableBlock](https://solana.com/docs/rpc/http/getfirstavailableblock) - dummy
     method used primarily for compatibility with solana explorer, the returned
     value should not be used for any decision making
