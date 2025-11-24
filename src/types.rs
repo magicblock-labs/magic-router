@@ -96,6 +96,7 @@ pub struct RpcIdentity {
 #[serde(rename_all = "camelCase")]
 pub struct DelegationStatus {
     pub is_delegated: bool,
+    pub fqdn: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delegation_record: Option<ParsedDelegationRecord>,
 }
