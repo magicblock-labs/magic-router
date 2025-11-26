@@ -333,15 +333,15 @@ impl RoHttpRpcServer for HttpServer {
     async fn delegation_status(&self, pubkey: SerdePubkey) -> RpcResult<DelegationStatus> {
         let record = self.delegations.get_record(pubkey.0).await;
         // Determine fqdn based on delegation status
-        let fqdn = if let Some(ref rec) = record {
+        let fqdn: Option<String> = if let Some(ref rec) = record {
             let authority = rec.authority.0;
             let client = self
                 .routes
                 .ephemeral_client(&authority)
                 .ok_or_else(|| RouterError::UnknownErNode(authority))?;
-            client.url()
+            Some(client.url())
         } else {
-            self.routes.base_chain().client.url()
+            None
         };
         let status = DelegationStatus {
             is_delegated: record.is_some(),
