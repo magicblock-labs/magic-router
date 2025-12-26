@@ -132,3 +132,56 @@ impl From<&ErRecord> for RouteInfo {
         }
     }
 }
+
+impl ParsedDelegationRecord {
+    const AUTHORITY_OFFSET: usize = 8;
+    const AUTHORITY_SIZE: usize = 32; // Pubkey is 32 bytes
+
+    const OWNER_OFFSET: usize = Self::AUTHORITY_OFFSET + Self::AUTHORITY_SIZE;
+    const OWNER_SIZE: usize = 32;
+
+    const SLOT_OFFSET: usize = Self::OWNER_OFFSET + Self::OWNER_SIZE;
+    const SLOT_SIZE: usize = 8; // u64 is 8 bytes
+
+    const LAMPORTS_OFFSET: usize = Self::SLOT_OFFSET + Self::SLOT_SIZE;
+    const LAMPORTS_SIZE: usize = 8;
+
+    // Minimum size required to read up to 'lamports'.
+    // The actual account data is larger (it includes commit_frequency_ms), but we only need these bytes.
+    const MIN_DATA_LEN: usize = Self::LAMPORTS_OFFSET + Self::LAMPORTS_SIZE;
+
+    pub fn from_bytes(data: Vec<u8>) -> Option<Self> {
+        // 1. Verify data length
+        (data.len() >= Self::MIN_DATA_LEN).then_some(())?;
+
+        // 3. Extract fields directly using slice indexing
+
+        // Authority (Pubkey)
+        let authority_bytes = &data[Self::AUTHORITY_OFFSET..Self::OWNER_OFFSET];
+        let authority = SerdePubkey(Pubkey::try_from(authority_bytes).ok()?);
+
+        // Owner (Pubkey)
+        let owner_bytes = &data[Self::OWNER_OFFSET..Self::SLOT_OFFSET];
+        let owner = SerdePubkey(Pubkey::try_from(owner_bytes).ok()?);
+
+        // Delegation Slot (u64)
+        let slot_bytes: [u8; 8] = data[Self::SLOT_OFFSET..Self::LAMPORTS_OFFSET]
+            .try_into()
+            .ok()?;
+        let delegation_slot = u64::from_le_bytes(slot_bytes);
+
+        // Lamports (u64)
+        // Note: The field commit_frequency_ms exists after this in the source struct, but we ignore it.
+        let lamports_bytes: [u8; 8] = data[Self::LAMPORTS_OFFSET..Self::LAMPORTS_OFFSET + 8]
+            .try_into()
+            .ok()?;
+        let lamports = u64::from_le_bytes(lamports_bytes);
+
+        Some(Self {
+            authority,
+            owner,
+            delegation_slot,
+            lamports,
+        })
+    }
+}

@@ -66,7 +66,8 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         routes.clone(),
         config.max_cached_delegations,
         config.laser_stream,
-    );
+    )
+    .await;
 
     let transactions = Arc::new(ForwardedTransactions::new(config.max_cached_transactions));
     let handler = HttpServer {
