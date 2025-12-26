@@ -30,6 +30,9 @@ use super::routes::RoutingTable;
 const CHANNEL_CAPACITY: usize = 1024;
 const MAX_ACCOUNT_REFETCH_ATTEMPTS: u64 = 3;
 const RETRY_BACKOFF_SECONDS: u64 = 2;
+/// The defensive shift for min context slot. This is needed due to
+/// laserstream (slot source) usually being ahead of the RPC providers
+const MIN_CONTEXT_SLOT_ROLLBACK: u64 = 8;
 
 /// A concurrent, bounded hash map used as the backing store for the cache.
 type DelegationsDB = Arc<HashCache<Pubkey, DelegationEntry>>;
@@ -99,7 +102,7 @@ impl DelegationsCache {
             Entry::Vacant(vacant_entry) => {
                 tracing::debug!(%pubkey, %pda, "tracking delegation for");
                 // On a cache miss, subscribe to get a recent slot, then fetch and insert.
-                let slot = self.subscribe(pda).await;
+                let slot = self.subscribe(pda).await - MIN_CONTEXT_SLOT_ROLLBACK;
                 let new_entry_data = self.fetch(pda, slot).await;
                 let record_to_return = new_entry_data.record.clone();
                 self.insert_new(vacant_entry, new_entry_data).await;

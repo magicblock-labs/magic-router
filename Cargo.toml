@@ -55,7 +55,7 @@ flume = "0.11"
 # networking
 url = { version = "2.5", features = ["serde"] }
 ping = { version = "0.8", package = "surge-ping" }
-magicblock-sync = { git = "https://github.com/magicblock-labs/magicblock-sync.git", rev = "952a830" }
+magicblock-sync = { git = "https://github.com/magicblock-labs/magicblock-sync.git", rev = "c85323" }
 
 # containers 
 scc = "3.0"
