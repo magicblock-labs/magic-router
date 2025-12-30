@@ -1,6 +1,6 @@
 [package]
 name = "magicblock-rpc-router"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["MagicBlock Maintainers <maintainers@magicblock.xyz>"]
 repository = "https://github.com/magicblock-labs/magic-router"
 homepage = "https://www.magicblock.xyz"
