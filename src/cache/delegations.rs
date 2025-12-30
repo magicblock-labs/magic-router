@@ -8,7 +8,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use dlp::{pda::delegation_record_pda_from_delegated_account, state::DelegationRecord};
+use magicblock_sync::{AccountUpdate, DlpSyncChannelsRequester, DlpSyncer};
 use scc::{
     hash_cache::{Entry, VacantEntry},
     HashCache,
@@ -17,16 +17,12 @@ use solana_account_decoder::UiAccountEncoding;
 use solana_commitment_config::CommitmentConfig;
 use solana_pubkey::Pubkey;
 use solana_rpc_client_api::{config::RpcAccountInfoConfig, response::Response as RpcResponse};
-use tokio::sync::{
-    mpsc::{channel, Receiver, Sender},
-    oneshot,
-};
+use tokio::sync::mpsc::Receiver;
 
 use crate::{
-    accounts::DelegationEntry,
+    accounts::{delegation_record_pda_from_delegated_account, DelegationEntry},
     config::LaserStreamConfig,
-    pubsub::laser::{LaserNotification, LaserRequest, LaserSubscriber},
-    types::{ParsedDelegationRecord, SerdePubkey},
+    types::ParsedDelegationRecord,
 };
 
 use super::routes::RoutingTable;
@@ -34,6 +30,9 @@ use super::routes::RoutingTable;
 const CHANNEL_CAPACITY: usize = 1024;
 const MAX_ACCOUNT_REFETCH_ATTEMPTS: u64 = 3;
 const RETRY_BACKOFF_SECONDS: u64 = 2;
+/// The defensive shift for min context slot. This is needed due to
+/// laserstream (slot source) usually being ahead of the RPC providers
+const MIN_CONTEXT_SLOT_ROLLBACK: u64 = 8;
 
 /// A concurrent, bounded hash map used as the backing store for the cache.
 type DelegationsDB = Arc<HashCache<Pubkey, DelegationEntry>>;
@@ -49,7 +48,7 @@ pub struct DelegationsCache {
     /// The underlying concurrent hash map for storing delegation entries.
     db: DelegationsDB,
     /// A sender channel to dispatch requests to the `LaserSubscriber` task.
-    requests_tx: Sender<LaserRequest>,
+    syncer: DlpSyncChannelsRequester,
     /// A reference to the routing table, used to get an RPC client for fetching account data.
     routes: Arc<RoutingTable>,
 }
@@ -60,27 +59,26 @@ impl DelegationsCache {
     /// This constructor initializes the cache and spawns two background tasks:
     /// - A `LaserSubscriber` to manage real-time subscriptions.
     /// - An `updater` task to process notifications and update the cache.
-    pub fn new(
+    pub async fn new(
         routes: Arc<RoutingTable>,
         max_cached_delegations: usize,
         laser: LaserStreamConfig,
     ) -> Arc<Self> {
-        let (requests_tx, requests_rx) = channel(CHANNEL_CAPACITY);
-        let (notifications_tx, notifications_rx) = channel(CHANNEL_CAPACITY);
-
         // Spawn the LaserSubscriber task to handle real-time subscriptions.
-        let laser_subscriber = LaserSubscriber::new(laser, requests_rx, notifications_tx);
-        tokio::spawn(tokio::task::unconstrained(laser_subscriber.run()));
+        let syncer = DlpSyncer::start(laser.endpoint, laser.api_key)
+            .await
+            .unwrap();
+        let (syncer, updates_rx) = syncer.split();
 
         let min_capacity = CHANNEL_CAPACITY.min(max_cached_delegations);
         let this = Arc::new(Self {
             db: HashCache::with_capacity(min_capacity, max_cached_delegations).into(),
-            requests_tx,
+            syncer,
             routes,
         });
 
         // Spawn the cache updater task to process notifications from LaserSubscriber.
-        let updater = this.clone().updater(notifications_rx);
+        let updater = this.clone().updater(updates_rx);
         tokio::spawn(tokio::task::unconstrained(updater));
 
         this
@@ -104,7 +102,7 @@ impl DelegationsCache {
             Entry::Vacant(vacant_entry) => {
                 tracing::debug!(%pubkey, %pda, "tracking delegation for");
                 // On a cache miss, subscribe to get a recent slot, then fetch and insert.
-                let slot = self.subscribe(pda).await;
+                let slot = self.subscribe(pda).await - MIN_CONTEXT_SLOT_ROLLBACK;
                 let new_entry_data = self.fetch(pda, slot).await;
                 let record_to_return = new_entry_data.record.clone();
                 self.insert_new(vacant_entry, new_entry_data).await;
@@ -126,7 +124,7 @@ impl DelegationsCache {
             }
 
             let response = rpc_client
-                .get_account_with_config(
+                .get_ui_account_with_config(
                     &pda,
                     RpcAccountInfoConfig {
                         encoding: Some(UiAccountEncoding::Base64),
@@ -142,8 +140,12 @@ impl DelegationsCache {
                     value: Some(account),
                     context,
                 }) => {
+                    let record = account
+                        .data
+                        .decode()
+                        .and_then(ParsedDelegationRecord::from_bytes);
                     return DelegationEntry {
-                        record: extract_delegation_record(&account.data),
+                        record,
                         slot: context.slot,
                     };
                 }
@@ -179,45 +181,41 @@ impl DelegationsCache {
     ) {
         if let (Some(evicted), _) = vacant_entry.put_entry(record) {
             // If an entry was evicted, unsubscribe from its real-time updates.
-            let unsub_req = LaserRequest::Unsubscribe(evicted.0);
-            if let Err(e) = self.requests_tx.send(unsub_req).await {
-                tracing::error!(error = %e, "Failed to send unsubscribe for evicted entry");
+            if self
+                .syncer
+                .unsubscribe(evicted.0.to_bytes())
+                .await
+                .is_none()
+            {
+                tracing::error!("Failed to send unsubscribe for evicted entry, syncer terminated");
             }
         };
     }
 
     /// Subscribes to real-time updates for an account PDA.
     async fn subscribe(&self, account: Pubkey) -> u64 {
-        let (slot_tx, slot_rx) = oneshot::channel();
-        let sub_req = LaserRequest::Subscribe { account, slot_tx };
-
-        if self.requests_tx.send(sub_req).await.is_err() {
-            tracing::error!("Failed to send subscription request: Laser task may have panicked.");
-            return 0;
-        }
-
-        slot_rx.await.unwrap_or_else(|_| {
-            tracing::error!("Laser subscriber failed to send subscription slot");
-            0
-        })
+        self.syncer
+            .subscribe(account.to_bytes())
+            .await
+            .unwrap_or_default()
     }
 
     /// The background task that processes notifications from the `LaserSubscriber`.
-    async fn updater(self: Arc<Self>, mut rx: Receiver<LaserNotification>) {
+    async fn updater(self: Arc<Self>, mut rx: Receiver<AccountUpdate>) {
         while let Some(msg) = rx.recv().await {
             match msg {
-                LaserNotification::Delegated { pubkey, data, slot } => {
-                    let new_record = extract_delegation_record(&data);
-                    self.update_cached_entry(pubkey, slot, new_record);
+                AccountUpdate::Delegated { record, data, slot } => {
+                    let new_record = ParsedDelegationRecord::from_bytes(data);
+                    self.update_cached_entry(record.into(), slot, new_record);
                 }
-                LaserNotification::Undelegated { pubkey, slot } => {
-                    self.update_cached_entry(pubkey, slot, None);
+                AccountUpdate::Undelegated { record, slot } => {
+                    self.update_cached_entry(record.into(), slot, None);
                 }
-                LaserNotification::Disconnected(pubkey) => {
+                AccountUpdate::SyncTerminated => {
                     // On disconnect, remove entry to prevent serving stale data.
                     // They will be re-fetched on next access.
-                    self.db.remove(&pubkey);
-                    tracing::debug!(%pubkey, "Removed delegation record due to disconnect");
+                    // self.db.remove(&pubkey);
+                    // tracing::debug!(%pubkey, "Removed delegation record due to disconnect");
                 }
             }
         }
@@ -230,7 +228,7 @@ impl DelegationsCache {
         slot: u64,
         new_record: Option<ParsedDelegationRecord>,
     ) {
-        let Some(mut cached_entry) = self.db.get(&pubkey) else {
+        let Some(mut cached_entry) = self.db.get_sync(&pubkey) else {
             tracing::warn!(%pubkey, "Received update for unknown or evicted pubkey");
             return;
         };
@@ -261,30 +259,5 @@ impl DelegationsCache {
         let entry_mut = cached_entry.get_mut();
         entry_mut.record = new_record;
         entry_mut.slot = slot;
-    }
-}
-
-/// Attempts to deserialize a byte slice into a `ParsedDelegationRecord`.
-fn extract_delegation_record(data: &[u8]) -> Option<ParsedDelegationRecord> {
-    if data.len() != DelegationRecord::size_with_discriminator() {
-        tracing::error!(
-            size = data.len(),
-            expected = DelegationRecord::size_with_discriminator(),
-            "Unexpected delegation record size"
-        );
-        return None;
-    }
-
-    match DelegationRecord::try_from_bytes_with_discriminator(data) {
-        Ok(record) => Some(ParsedDelegationRecord {
-            authority: SerdePubkey(record.authority),
-            owner: SerdePubkey(record.owner),
-            delegation_slot: record.delegation_slot,
-            lamports: record.lamports,
-        }),
-        Err(error) => {
-            tracing::error!(%error, "Failed to parse delegation record");
-            None
-        }
     }
 }

@@ -69,7 +69,7 @@ impl SubscriptionDispatcher {
             };
             spawned += 1;
         }
-        tracing::info!("{spawned} new websocket connections to {url} has been established");
+        tracing::info!("{spawned} new websocket connections to {url} have been established");
         (url, tx)
     }
 

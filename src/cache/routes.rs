@@ -100,11 +100,13 @@ impl RoutingTable {
     }
 
     pub fn ephemeral_client(&self, identity: &Pubkey) -> Option<Arc<RpcClient>> {
-        self.inner.get(identity).map(|e| e.get().client.clone())
+        self.inner
+            .get_sync(identity)
+            .map(|e| e.get().client.clone())
     }
 
     pub fn ephemeral_handle(&self, identity: &Pubkey) -> Option<RemoteHandle> {
-        self.inner.get(identity).map(|e| RemoteHandle {
+        self.inner.get_sync(identity).map(|e| RemoteHandle {
             rpc: e.client.clone(),
             ws: e.ws_url.clone(),
         })
@@ -127,13 +129,14 @@ impl RoutingTable {
         let mut node_id = Pubkey::default();
         let mut client = self.base_chain().client.clone();
         let mut min_proximity = u64::MAX;
-        self.inner.scan(|pubkey, record| {
+        self.inner.iter_sync(|pubkey, record| {
             if min_proximity <= record.proximity_micros {
-                return;
+                return true;
             }
             min_proximity = record.proximity_micros;
             node_id = *pubkey;
             client = record.client.clone();
+            true
         });
         (SerdePubkey(node_id), client)
     }
@@ -141,10 +144,11 @@ impl RoutingTable {
     pub async fn all_routes(&self) -> Vec<RouteInfo> {
         let mut routes = Vec::new();
         self.inner
-            .scan_async(|_, r| {
+            .iter_async(|_, r| {
                 if let Some(ref info) = r.info {
                     routes.push(info.clone())
                 }
+                true
             })
             .await;
         routes
@@ -165,7 +169,7 @@ impl RoutingTable {
             return;
         };
         let identity = *record.identity();
-        let _ = self.pda_to_identity.insert(pubkey, identity);
+        let _ = self.pda_to_identity.insert_sync(pubkey, identity);
         let _ = self
             .upstream_state_tx
             .send(WsUpstreamState {
@@ -173,14 +177,14 @@ impl RoutingTable {
                 url: upstream.ws_url.clone(),
             })
             .await;
-        let _ = self.inner.insert(identity, upstream);
+        let _ = self.inner.insert_sync(identity, upstream);
     }
 
     async fn remove_entry(&self, pda: &Pubkey) {
-        let Some((_, identity)) = self.pda_to_identity.remove(pda) else {
+        let Some((_, identity)) = self.pda_to_identity.remove_sync(pda) else {
             return;
         };
-        let Some((_, upstream)) = self.inner.remove(&identity) else {
+        let Some((_, upstream)) = self.inner.remove_sync(&identity) else {
             return;
         };
         let _ = self
@@ -248,7 +252,7 @@ impl RoutingTable {
                             tracing::warn!(?ping, "failed to perform ping request");
                             continue;
                         };
-                        let Some(mut record) = self.inner.get(&pubkey) else {
+                        let Some(mut record) = self.inner.get_sync(&pubkey) else {
                             continue;
                         };
 
@@ -267,13 +271,14 @@ impl RoutingTable {
                         );
                     }
                     _ = ping_ticker.tick() => {
-                        self.inner.scan(|&pubkey, record| {
+                        self.inner.iter_sync(|&pubkey, record| {
                             let client = record.client.clone();
                             let task = async move {
                                 let start = Instant::now();
                                 client.get_identity().await.map(|_| (pubkey, start.elapsed()))
                             };
                             pings.push(task);
+                            true
                         });
                     }
                     else => {

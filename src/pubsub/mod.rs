@@ -1,6 +1,5 @@
 pub mod connection;
 pub mod dispatch;
-pub mod laser;
 pub mod notification;
 pub mod subscription;
 

@@ -15,9 +15,7 @@ use jsonrpsee::{
     types::ErrorObjectOwned,
 };
 use scc::HashCache;
-use solana_account_decoder::{
-    encode_ui_account, parse_token::UiTokenAmount, UiAccount, UiAccountEncoding,
-};
+use solana_account_decoder::{parse_token::UiTokenAmount, UiAccount};
 use solana_commitment_config::CommitmentConfig;
 use solana_hash::Hash;
 use solana_pubkey::Pubkey;
@@ -90,18 +88,13 @@ impl RoHttpRpcServer for HttpServer {
         let pubkey = pubkey.0;
         let client = self.resolve_client(pubkey).await?;
         let config = params.unwrap_or_default();
-        let encoding = config.encoding.unwrap_or(UiAccountEncoding::Base64Zstd);
-        let data_slice_config = config.data_slice;
         let response = client
-            .get_account_with_config(&pubkey, config)
+            .get_ui_account_with_config(&pubkey, config)
             .await
             .map_err(RouterError::from)?;
-        let uiaccount = response
-            .value
-            .map(|account| encode_ui_account(&pubkey, &account, encoding, None, data_slice_config));
         Ok(Response {
             context: response.context,
-            value: uiaccount,
+            value: response.value,
         })
     }
 
@@ -114,8 +107,6 @@ impl RoHttpRpcServer for HttpServer {
         let mut undelegated_pubkeys = Vec::new();
 
         let config = params.unwrap_or_default();
-        let encoding = config.encoding.unwrap_or(UiAccountEncoding::Base64Zstd);
-        let data_slice_config = config.data_slice;
 
         let mut response = vec![None; pubkeys.len()];
         let mut futures = Vec::with_capacity(pubkeys.len());
@@ -149,7 +140,7 @@ impl RoHttpRpcServer for HttpServer {
             let req = async move {
                 let pks: Vec<_> = pubkeys.iter().map(|(_, pk)| *pk).collect();
                 let response = client
-                    .get_multiple_accounts_with_config(&pks, config)
+                    .get_multiple_ui_accounts_with_config(&pks, config)
                     .await?;
                 let accounts = pubkeys.into_iter().zip(response.value);
                 slot.fetch_max(response.context.slot, Ordering::Relaxed);
@@ -164,7 +155,7 @@ impl RoHttpRpcServer for HttpServer {
             let req = async move {
                 let pks: Vec<_> = undelegated_pubkeys.iter().map(|(_, pk)| *pk).collect();
                 let response = client
-                    .get_multiple_accounts_with_config(&pks, config)
+                    .get_multiple_ui_accounts_with_config(&pks, config)
                     .await?;
                 let accounts = undelegated_pubkeys.into_iter().zip(response.value);
                 slot.fetch_max(response.context.slot, Ordering::Relaxed);
@@ -174,10 +165,8 @@ impl RoHttpRpcServer for HttpServer {
             requests.push(req);
         }
         while let Some(accounts) = requests.next().await {
-            for ((index, pubkey), account) in accounts? {
-                response[index] = account.map(|account| {
-                    encode_ui_account(&pubkey, &account, encoding, None, data_slice_config)
-                });
+            for ((index, _), account) in accounts? {
+                response[index] = account;
             }
         }
 
