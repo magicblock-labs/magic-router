@@ -1,6 +1,6 @@
 [package]
 name = "magicblock-rpc-router"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["MagicBlock Maintainers <maintainers@magicblock.xyz>"]
 repository = "https://github.com/magicblock-labs/magic-router"
 homepage = "https://www.magicblock.xyz"
@@ -21,6 +21,13 @@ features = [
   "macros",
   "client-ws-transport-tls",
 ]
+
+# programs 
+[dependencies.mdp]
+package = "magic-domain-program"
+git = "https://github.com/magicblock-labs/magic-domain-program.git"
+tag = "v0.3.0"
+default-features = false
 
 
 [dependencies]
@@ -45,9 +52,6 @@ solana-signature = { version = "3.0" }
 solana-transaction = { version = "3.0" }
 solana-transaction-error = { version = "3.0" }
 solana-transaction-status-client-types = { version = "3.0" }
-
-# programs 
-mdp = { package = "magic-domain-program", git = "https://github.com/magicblock-labs/magic-domain-program.git", rev = "9511d5", default-features = false }
 
 # sync
 flume = "0.11"
