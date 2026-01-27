@@ -265,7 +265,7 @@ impl RoutingTable {
                                 ((record.proximity_micros * 85) + last * 15) / 100;
                         }
                         let host =  record.ws_url.host_str().unwrap_or_default();
-                        tracing::info!(
+                        tracing::debug!(
                             "ping to {host} took {last}μs, avg: {}μs",
                             record.proximity_micros
                         );
