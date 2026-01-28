@@ -314,29 +314,59 @@ connections-per-upstream = 5
 
 ## Testing
 
-### Run the Complete Integration Test
+### Running Locally with a Test Validator
 
-To test the router with automatic validator registration and discovery:
+To test the router with a local Solana test validator, you need to clone the Magic Domain Program and ER record account from devnet:
+
+1. Start a local test validator with cloned accounts:
 
 ```bash
-./test/test-registration.sh
+solana-test-validator \
+  --clone-upgradeable-program DmnRGfyyftzacFb1XadYhWF6vWqXwtQk5tbr6XgR3BA1 \
+  --clone 34gGnNmnGk5VDZ8sz1qdpswKriiiVnb379k3kvBWRS54 \
+  --clone mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev \
+  --clone EpJnX7ueXk7fKojBymqmVuCuwyhDQsYcLVL1XMsBbvDX \
+  --clone 7JrkjmZPprHwtuvtuGTXp9hwfGYFAQLnLeFM52kqAgXg \
+  --clone noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV \
+  --clone-upgradeable-program DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh \
+  --clone Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh \
+  --clone 5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc \
+  --clone F72HqCR8nwYsVyeVd38pgKkjXmXFzVAM8rjZZsXWbdE \
+  --clone vrfkfM4uoisXZQPrFiS2brY4oMkU9EWjyvmvqaFd5AS \
+  --clone-upgradeable-program Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz \
+  --clone-upgradeable-program BTWAqWNBmF2TboMh3fxMJfgR16xGHYD7Kgr2dPwbRPBi \
+  --clone-upgradeable-program ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1 \
+  --url devnet
 ```
 
-This comprehensive test:
-1. Starts a local Solana test validator
-2. Starts an ephemeral validator
-3. Registers the validator with the Magic Domain Program
-4. Starts the Magic Router
-5. Tests route discovery via the `getRoutes` endpoint
-6. Cleans up all services
+Where:
 
-**Prerequisites for testing:**
-- `solana-test-validator` (from Solana CLI)
-- `ephemeral-validator` binary
-- `nc` (netcat) for port checking
-- `jq` (optional, for JSON formatting)
+- `DmnRGfyyftzacFb1XadYhWF6vWqXwtQk5tbr6XgR3BA1` is the Magic Domain Program
+- `34gGnNmnGk5VDZ8sz1qdpswKriiiVnb379k3kvBWRS54` is the ER record account containing validator information
 
-See [test/README.md](test/README.md) for detailed testing documentation, troubleshooting, and manual testing instructions.
+2. Configure the router to use your local validator by creating a `config.local.toml`:
+
+```toml
+listen-address = "127.0.0.1:8080"
+base-chain-urls = ["http://localhost:8899"]
+max-cached-delegations = 16384
+max-cached-transactions = 16384
+max-connections = 1024
+max-subscriptions-per-connection = 1024
+proximity-ping-frequency-sec = 30
+
+[websocket]
+ping-interval-sec = 30
+connections-per-upstream = 5
+```
+
+3. Run the router:
+
+```bash
+RUST_LOG=info cargo run-local
+```
+
+This will start the router listening on `http://localhost:8080` and route requests to your local validator.
 
 ## Deployment
 
