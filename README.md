@@ -312,6 +312,32 @@ ping-interval-sec = 30
 connections-per-upstream = 5
 ```
 
+## Testing
+
+### Run the Complete Integration Test
+
+To test the router with automatic validator registration and discovery:
+
+```bash
+./test/test-registration.sh
+```
+
+This comprehensive test:
+1. Starts a local Solana test validator
+2. Starts an ephemeral validator
+3. Registers the validator with the Magic Domain Program
+4. Starts the Magic Router
+5. Tests route discovery via the `getRoutes` endpoint
+6. Cleans up all services
+
+**Prerequisites for testing:**
+- `solana-test-validator` (from Solana CLI)
+- `ephemeral-validator` binary
+- `nc` (netcat) for port checking
+- `jq` (optional, for JSON formatting)
+
+See [test/README.md](test/README.md) for detailed testing documentation, troubleshooting, and manual testing instructions.
+
 ## Deployment
 
 To deploy the router, compile the project in release mode:

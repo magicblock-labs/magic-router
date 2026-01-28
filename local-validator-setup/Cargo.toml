@@ -1,5 +1,5 @@
 [package]
-name = "magic-router-local-setup"
+name = "local-validator-setup"
 version = "0.1.0"
 edition = "2021"
 

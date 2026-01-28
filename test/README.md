@@ -1,176 +1,188 @@
 # Local Testing Guide
 
-Complete end-to-end test of the Magic Router with automatic validator setup.
+Complete end-to-end test of the Magic Router with automatic validator setup and ephemeral validator registration.
 
 ## Prerequisites
 
 - Rust 1.70+
 - Solana CLI with `solana-test-validator` command
+- `ephemeral-validator` binary (for validator registration testing)
 - `nc` (netcat) for port checking
 - `jq` for JSON output formatting (optional but recommended)
 
-## Run Complete Test
+## Quick Start
 
-```bash
-./test/run-test.sh
-```
-
-This single command:
-1. ✓ Checks if validator is running, starts it if needed
-2. ✓ Clones all required programs from devnet
-3. ✓ Builds the router
-4. ✓ Starts the router (works with or without Laser Stream)
-5. ✓ Tests the getRoutes endpoint
-6. ✓ Verifies validator auto-registration
-7. ✓ Displays validator configuration
-8. ✓ Cleans up and reports results
-
-## Test Validator Registration
-
-To specifically test validator registration without the full router test:
+Run the complete validator registration test:
 
 ```bash
 ./test/test-registration.sh
 ```
 
-This will:
-1. Verify the Solana validator is running
-2. Run the `local-validator-setup` binary
-3. Confirm the registration transaction was submitted
-4. Display the transaction signature
+This single script:
+1. ✓ Kills any existing validators for a clean state
+2. ✓ Starts a local Solana test validator with WebSocket support
+3. ✓ Clones all required programs from devnet (Magic Domain Program, etc.)
+4. ✓ Starts an ephemeral validator on port 7799
+5. ✓ Registers the ephemeral validator with the Magic Domain Program
+6. ✓ Verifies the registration transaction and on-chain account
+7. ✓ Starts the Magic Router
+8. ✓ Tests route discovery via `getRoutes` endpoint (retries for 10 seconds)
+9. ✓ Displays validator configuration
+10. ✓ Cleans up and stops all services
 
-### Laser Stream (Optional for Real-time Updates)
+## Test Flow
 
-The router works without Laser Stream, but delegation updates will be slower (RPC-only instead of real-time streaming).
+### 1. Solana Test Validator (Port 8899 RPC, 8900 WebSocket)
 
-To enable real-time delegation updates, get a Helius API key at [Helius](https://www.helius.dev/) and configure it:
+The script starts a `solana-test-validator` with:
+- Local ledger in `./test/test-ledger/`
+- Required program clones from devnet
+- WebSocket support enabled (`--rpc-pubsub-max-connections 1000`)
 
-```toml
-[laser-stream]
-endpoint = "https://laserstream-devnet-ewr.helius-rpc.com"
-api-key = "your-actual-helius-api-key"
+### 2. Ephemeral Validator (Port 7799)
+
+The script automatically starts an `ephemeral-validator` instance that:
+- Connects to the test validator as its remote cluster
+- Listens on `http://127.0.0.1:7799`
+- Can be registered in the Magic Domain Program
+
+### 3. Validator Registration
+
+The test registers the ephemeral validator by:
+- Running `local-validator-setup` binary
+- Creating an ER record in the Magic Domain Program
+- Fetching and deserializing the created account to verify
+
+### 4. Router Testing
+
+Once registered, the Magic Router:
+- Subscribes to Magic Domain Program account changes via WebSocket
+- Discovers the newly registered validator
+- Serves the validator info via `getRoutes` endpoint
+
+## Test Results
+
+On success, you'll see:
+```
+✅ Registration transaction submitted
+   Signature: <transaction-signature>
+
+✅ ER Record account verified on-chain
+   Account: <PDA>
+   Lamports: 1600800
+
+✅ TEST PASSED: Validator successfully registered
+
+✓ Router is running
+
+Attempt 1/10: No validators found yet, retrying...
+...
+✅ Validator found in getRoutes response!
+
+Validator Configuration:
+  Identity: mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev
+  FQDN: http://127.0.0.1:7799
+  Block time: 50ms
+  Base fee: 0 lamports
+  Country code: USA
+  Status: Active
 ```
 
-Expected output on success (without Laser Stream):
+## Troubleshooting
+
+### Validator Discovery Fails
+
+The test shows:
 ```
-✓ Router is working!
-Response: {"jsonrpc":"2.0","id":1,"result":[]}
+❌ Validator not found in routes after 10 seconds
+
+Debugging information:
+  ✓ Test validator RPC (8899) is up
+  ✓ Test validator WebSocket (8900) is up
+  ✓ Ephemeral validator RPC (7799) is up
 ```
 
-Expected output on success (with Laser Stream and registered validator):
-```
-✅ TEST PASSED: Validator was auto-registered and is discoverable
-```
-
-## Manual Testing (Step by Step)
-
-If you prefer to run each step separately:
+If any validator shows "DOWN", restart it:
 
 ```bash
-# Terminal 1: Start validator
-./test/setup.sh
+# Kill all validators
+pkill -f solana-test-validator
+pkill -f ephemeral-validator
 
-# Terminal 2: Start router (works with or without Laser Stream)
-./target/release/magicblock-rpc-router test/config.local.toml
-
-# Terminal 3: Test the endpoint
-./test/test-routes.sh
+# Run test again
+./test/test-registration.sh
 ```
 
-The router will work fine without Laser Stream configured. Delegation updates will just be slower (RPC-only).
+### WebSocket Connection Errors
 
-## Files
+If you see `Connection rejected with status code: 405`:
 
-- **run-test.sh** - Complete end-to-end test (recommended)
-- **setup.sh** - Just setup and build (if you want to run router manually)
-- **test-routes.sh** - Just test a running router's getRoutes endpoint
-- **test-registration.sh** - Test validator registration specifically
-- **config.local.toml** - Router configuration for localhost with Laser Stream config
-- **config.local-no-laser.toml** - Router configuration for localhost without Laser Stream
+The router expects WebSocket on port 8900 (RPC port + 1) for the test validator. The router automatically adds 1 to the RPC port for local validators (localhost/127.0.0.1).
 
-## Detailed Setup Steps
+### Ephemeral Validator Won't Start
 
-### 1. Automatic Setup (Recommended)
+Check if port 7799 is already in use:
 
 ```bash
-./test/setup.sh
+lsof -i :7799
+pkill -f ephemeral-validator
 ```
 
-This handles:
-- Checking if validator is running
-- Starting validator with all clones if needed
-- Building the router
+Then re-run the test.
 
-### 2. Manual Setup (Alternative)
+### Registration Transaction Fails
 
-If you prefer manual control:
+The test continues even if the transaction fails initially (graceful degradation). It will:
+- Log the error
+- Fetch the account from the blockchain
+- Display the account contents if it exists
+
+This handles the case where the validator was already registered.
+
+## Manual Testing
+
+If you want to run components manually:
+
+### Start Test Validator Only
 
 ```bash
-# Terminal 1: Start validator (if not already running)
 solana-test-validator \
   --ledger ./test/test-ledger \
   --reset \
+  --rpc-pubsub-max-connections 1000 \
   --clone-upgradeable-program DmnRGfyyftzacFb1XadYhWF6vWqXwtQk5tbr6XgR3BA1 \
-  --clone mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev \
-  --clone EpJnX7ueXk7fKojBymqmVuCuwyhDQsYcLVL1XMsBbvDX \
-  --clone 7JrkjmZPprHwtuvtuGTXp9hwfGYFAQLnLeFM52kqAgXg \
-  --clone noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV \
-  --clone-upgradeable-program DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh \
-  --clone Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh \
-  --clone 5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc \
-  --clone F72HqCR8nwYsVyeVd38pgKkjXmXFzVAM8rjZZsXWbdE \
-  --clone vrfkfM4uoisXZQPrFiS2brY4oMkU9EWjyvmvqaFd5AS \
-  --clone-upgradeable-program Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz \
-  --clone-upgradeable-program BTWAqWNBmF2TboMh3fxMJfgR16xGHYD7Kgr2dPwbRPBi \
-  --clone-upgradeable-program ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1 \
-  --url https://api.devnet.solana.com
-
-# Terminal 2: Build and run router
-cargo build --release
-./target/release/magicblock-rpc-router test/config.local.toml
+  --url https://rpc.magicblock.app/devnet
 ```
 
-### 3. Run the Router
-
-Once the validator is running:
+### Start Ephemeral Validator
 
 ```bash
-./target/release/magicblock-rpc-router test/config.local.toml
+ephemeral-validator \
+  --accounts-lifecycle ephemeral \
+  --remote-cluster development \
+  --remote-url http://localhost:8899 \
+  --remote-ws-url ws://localhost:8900 \
+  --rpc-port 7799
 ```
 
-The router will:
-- Detect `http://127.0.0.1:8899` as a local endpoint
-- Automatically run `local-validator-setup` to register the validator
-- Start accepting connections on `http://127.0.0.1:8080`
-
-Expected output:
-```
-Local endpoints detected, attempting to auto-register validator...
-✓ Local validator registered successfully
-Listening for incoming connections on 127.0.0.1:8080
-Router is ready and running!
-```
-
-## Testing the Router
-
-Once the router is running, test it with:
-
-### Using the Test Script
+### Register Validator
 
 ```bash
-./test/test-routes.sh
+cargo run -p magic-router-setup --release -- \
+  --rpc-url http://localhost:8899 \
+  --fqdn http://127.0.0.1:7799
 ```
 
-This runs the `getRoutes` test and shows all registered ER nodes.
-
-### Manual Testing
-
-Test specific endpoints:
-
-#### Get Routes
+### Start Router
 
 ```bash
-curl -X POST http://127.0.0.1:8080 \
+RUST_LOG=info ./target/release/magicblock-rpc-router test/config.local-no-laser.toml
+```
+
+### Test getRoutes
+
+```bash
+curl -X POST http://127.0.0.1:8080/getRoutes \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -179,186 +191,24 @@ curl -X POST http://127.0.0.1:8080 \
   }'
 ```
 
-Expected response (should include your auto-registered validator):
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": [
-    {
-      "identity": "YOUR_VALIDATOR_PUBKEY",
-      "fqdn": "http://localhost:8000",
-      "baseFee": 5000,
-      "blockTimeMs": 400,
-      "countryCode": "USA"
-    }
-  ]
-}
-```
-
-#### Get Account Info
-
-```bash
-curl -X POST http://127.0.0.1:8080 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "getAccountInfo",
-    "params": ["11111111111111111111111111111111"]
-  }'
-```
-
-#### Get Delegation Status
-
-```bash
-curl -X POST http://127.0.0.1:8080 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "getDelegationStatus",
-    "params": ["11111111111111111111111111111111"]
-  }'
-```
-
-## How the Registration Works
-
-When the router starts with a local endpoint configured:
-
-1. **Detection** - `src/local_setup.rs` detects localhost endpoint
-2. **Binary Execution** - Spawns `local-validator-setup` binary
-3. **Registration** - The binary:
-   - Loads the validator keypair
-   - Derives the PDA for the ER record
-   - Creates an `ErRecord` with validator configuration
-   - Builds and signs a transaction calling the Magic Domain Program's `Register` instruction
-   - Submits the transaction and waits for confirmation
-4. **Route Discovery** - Router queries the Magic Domain Program and discovers the registered validator
-5. **Routing** - Router can now route requests to the registered validator
-
-The registration happens automatically every time the router starts, updating the record if it already exists.
-
-## Troubleshooting
-
-### Setup Script Issues
-
-#### "Connection refused" or port 8899 not responding
-
-The validator may not have started. Check:
-```bash
-# Check if validator is running
-lsof -i :8899
-# or
-netstat -an | grep 8899
-```
-
-If not running, the setup script will try to start it. If it fails, try manually:
-```bash
-solana-test-validator \
-  --ledger ./test/test-ledger \
-  --reset \
-  --url https://api.devnet.solana.com
-```
-
-#### "netcat not found"
-
-The setup script uses `nc` to check if validator is running. Install it:
-```bash
-# macOS
-brew install netcat
-
-# Ubuntu/Debian
-sudo apt-get install netcat
-
-# Or skip the check and manually start validator
-solana-test-validator --ledger ./test/test-ledger --reset
-```
-
-### Router Issues
-
-#### "Local validator registration failed" but router still running
-
-The router continues even if auto-registration fails (graceful degradation). You can manually register:
-```bash
-cargo run -p magic-router-setup --release -- \
-  --rpc-url http://127.0.0.1:8899 \
-  --fqdn http://localhost:8000
-```
-
-#### Router can't find programs
-
-The Magic Domain Program and other programs need to be cloned from devnet. The setup script does this automatically with the `--clone` flags. If running validator manually, include those flags.
-
-#### Router won't start
-
-Check the logs for specific errors. Common issues:
-- Validator not running on port 8899
-- Laser stream config invalid (for local testing, this can be disabled)
-- Port 8080 already in use
-
-## Stopping the Router
-
-Press `Ctrl+C` to gracefully shutdown the router.
-
-## Cleaning Up
-
-Stop the Solana validator:
-```bash
-# The test validator runs in foreground, just Ctrl+C it
-# This cleans up the test ledger
-```
-
-To reset the local chain completely:
-```bash
-rm -rf test-ledger/
-```
-
 ## Configuration
 
-Edit `test/config.local.toml` to adjust:
-- `listen-address` - Router's listening address
-- `base-chain-urls` - Base chain RPC URLs (should be localhost for testing)
+Edit `test/config.local-no-laser.toml` to adjust:
+- `listen-address` - Router's listening address (default: 127.0.0.1:8080)
+- `base-chain-urls` - Test validator RPC URL (default: http://127.0.0.1:8899)
 - `max-cached-delegations` - Cache size for delegation records
 - `max-connections` - Max concurrent connections
-- `laser-stream` - Helius Laser Stream config (optional for local testing)
+
+## Files
+
+- **test-registration.sh** - Complete validator registration test (recommended)
+- **config.local-no-laser.toml** - Router configuration for local testing without Laser Stream
 
 ## How It Works
 
-### Automatic Validator Registration
+1. **Validator Detection**: Router connects to test validator RPC
+2. **Program Subscription**: Router subscribes to Magic Domain Program via WebSocket
+3. **Validator Discovery**: When ephemeral validator registers, router receives notification
+4. **Route Caching**: Router caches validator info and serves via `getRoutes`
 
-When the router detects a local endpoint (localhost or http://) in `config.local.toml`:
-
-1. **Startup detection** - `src/local_setup.rs` checks if any `base-chain-urls` are local
-2. **Auto-register** - Runs `local-validator-setup` binary to register the validator in the Magic Domain Program
-3. **Discover routes** - Router queries the Magic Domain Program and finds the registered validator
-4. **Route requests** - Router can now route to the validator
-
-### Program Clones
-
-The `setup.sh` script clones these programs from devnet to ensure all required programs are available:
-
-- **Magic Domain Program** (DmnRGfyyftzacFb1XadYhWF6vWqXwtQk5tbr6XgR3BA1) - ER node registry
-- **Delegation Program** (DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh) - Account delegation tracking
-- **VRF Program** (Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz) - Verifiable randomness
-- Various system programs and utilities
-
-### Validator Registration Details
-
-The auto-registered validator has these defaults:
-- **Identity**: From hardcoded keypair in `local-validator-setup`
-- **FQDN**: `http://localhost:8000`
-- **Status**: Active
-- **Block Time**: 400ms
-- **Base Fee**: 5000 lamports
-- **Country Code**: USA
-
-To change these, edit `local-validator-setup/src/main.rs` or pass command line arguments.
-
-## Notes
-
-- The setup script checks if validator is running before starting (won't start duplicates)
-- Each router restart auto-registers (updates the record if it already exists)
-- Test ledger is in `./test/test-ledger/` (cleaned on validator reset)
-- For production testing, use devnet or mainnet configs instead
-- Laser stream config is optional for local testing (router continues without it)
+The test validates this entire flow end-to-end.

@@ -188,13 +188,13 @@ echo ""
 VALIDATOR_KEYPAIR_BYTES="07 53 b8 37 c8 df ee 89 a6 f4 6b 7e bd 10 c2 24 e4 44 2b 8f 0d 5b 03 51 35 fd 1a 24 32 c6 28 9f 0b 50 09 d0 b7 bd 6c c8 59 4d a8 4c e9 c5 84 16 15 ba ca f0 69 a8 9d 40 e9 f9 64 68 d2 29 53 57"
 
 # Use solana-cli to derive the pubkey from the keypair
-echo "📝 Registering validator identity using magic-router-local-setup..."
+echo "📝 Registering validator identity using local-validator-setup..."
 echo ""
 
 cd "$REPO_ROOT"
 
 # Run the registration and capture output
-OUTPUT=$(cargo run -p magic-router-local-setup --release -- \
+OUTPUT=$(cargo run -p local-validator-setup --release -- \
   --rpc-url "$RPC_BASE_URL" \
   --fqdn "$ER_VALIDATOR_URL" \
   --block-time-ms 50 \
@@ -375,7 +375,7 @@ echo ""
         echo "🛑 Stopping test validator (PID: $VALIDATOR_PID)..."
         kill $VALIDATOR_PID 2>/dev/null || true
         wait $VALIDATOR_PID 2>/dev/null || true
-        echo "✓ Test alidator stopped"
+        echo "✓ Test validator stopped"
     fi
     
     exit 0
