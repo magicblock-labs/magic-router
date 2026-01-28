@@ -27,8 +27,8 @@ proximity-ping-frequency-sec = 30
 
 # Configuration for Helius laser stream (to keep track of delegations)
 [laser-stream]
-endpoint = "https://laserstream-devnet-ewr.helius-rpc.com"
-api-key = "9f424181-df7e-4069-be71-40896f62d9c5"
+endpoint = ""
+api-key = ""
 
 # WebSocket connection configuration
 [websocket]
