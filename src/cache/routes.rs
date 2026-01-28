@@ -303,18 +303,30 @@ pub struct UpstreamRecord {
 }
 
 impl UpstreamRecord {
-    async fn new_from_url(mut fqdn: Url, info: Option<RouteInfo>) -> Option<Self> {
+    async fn new_from_url(fqdn: Url, info: Option<RouteInfo>) -> Option<Self> {
         let client = Arc::new(RpcClient::new(fqdn.to_string()));
         client.get_identity().await.ok()?;
+        
         let scheme = if fqdn.scheme() == "https" {
             "wss"
         } else {
             "ws"
         };
-        fqdn.set_scheme(scheme).ok()?;
+        
+        let mut ws_url = fqdn.clone();
+        ws_url.set_scheme(scheme).ok()?;
+        
+        // Handle local validator WebSocket port offset (solana-test-validator uses RPC port + 1)
+        let is_local = fqdn.host_str().map(|h| h == "localhost" || h == "127.0.0.1").unwrap_or(false);
+        if is_local {
+            if let Some(port) = fqdn.port() {
+                ws_url.set_port(Some(port + 1)).ok()?;
+            }
+        }
+        
         Some(UpstreamRecord {
             client,
-            ws_url: Arc::new(fqdn),
+            ws_url: Arc::new(ws_url),
             proximity_micros: u64::MAX,
             info,
         })

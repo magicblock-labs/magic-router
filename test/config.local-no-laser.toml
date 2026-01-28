@@ -1,0 +1,22 @@
+# Local development configuration for testing with local Solana validator
+# This config skips Laser Stream for local testing
+# Note: solana-test-validator exposes WebSocket on RPC port + 1 (8900 for RPC 8899)
+
+listen-address = "127.0.0.1:8080"
+base-chain-urls = ["http://127.0.0.1:8899"]
+
+max-cached-delegations = 16384
+max-cached-transactions = 16384
+max-connections = 1024
+max-subscriptions-per-connection = 1024
+
+proximity-ping-frequency-sec = 30
+
+# Laser Stream disabled for local testing
+[laser-stream]
+endpoint = ""
+api-key = ""
+
+[websocket]
+ping-interval-sec = 30
+connections-per-upstream = 5

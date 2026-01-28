@@ -19,6 +19,7 @@ pub mod accounts;
 pub mod cache;
 pub mod config;
 pub mod error;
+pub mod local_setup;
 pub mod pubsub;
 pub mod server;
 pub mod types;

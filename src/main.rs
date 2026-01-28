@@ -3,6 +3,7 @@ use std::{env, fs::read_to_string};
 use router::RouterResult;
 
 use router::config::RouterConfig;
+use router::local_setup::auto_register_validator_if_local;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -17,6 +18,12 @@ async fn main() -> RouterResult<()> {
     let config = read_to_string(config_path)?;
     let config: RouterConfig =
         toml::from_str(&config).expect("failed to parse router configuration file");
+    
+    // Auto-register validator if using local endpoints
+    if let Err(e) = auto_register_validator_if_local(&config).await {
+        tracing::warn!("Failed to auto-register validator: {}", e);
+    }
+    
     let handle = router::run(config).await?;
     tracing::info!("Router is ready and running!");
     tokio::signal::ctrl_c().await?;

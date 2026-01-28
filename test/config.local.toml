@@ -1,0 +1,22 @@
+# Local development configuration for testing with local Solana validator
+# Use this config with: ./test/run-test.sh
+
+listen-address = "127.0.0.1:8080"
+base-chain-urls = ["http://127.0.0.1:8899"]
+
+max-cached-delegations = 16384
+max-cached-transactions = 16384
+max-connections = 1024
+max-subscriptions-per-connection = 1024
+
+proximity-ping-frequency-sec = 30
+
+# NOTE: For local testing, Laser Stream is optional. 
+# The router will attempt to connect but continue if it fails.
+[laser-stream]
+endpoint = "https://laserstream-devnet-ewr.helius-rpc.com"
+api-key = "local-test-key"
+
+[websocket]
+ping-interval-sec = 30
+connections-per-upstream = 5

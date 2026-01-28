@@ -47,8 +47,8 @@ type DelegationsDB = Arc<HashCache<Pubkey, DelegationEntry>>;
 pub struct DelegationsCache {
     /// The underlying concurrent hash map for storing delegation entries.
     db: DelegationsDB,
-    /// A sender channel to dispatch requests to the `LaserSubscriber` task.
-    syncer: DlpSyncChannelsRequester,
+    /// A sender channel to dispatch requests to the `LaserSubscriber` task (optional for local testing).
+    syncer: Option<DlpSyncChannelsRequester>,
     /// A reference to the routing table, used to get an RPC client for fetching account data.
     routes: Arc<RoutingTable>,
 }
@@ -64,24 +64,41 @@ impl DelegationsCache {
         max_cached_delegations: usize,
         laser: LaserStreamConfig,
     ) -> Arc<Self> {
-        // Spawn the LaserSubscriber task to handle real-time subscriptions.
-        let syncer = DlpSyncer::start(laser.endpoint, laser.api_key)
-            .await
-            .unwrap();
-        let (syncer, updates_rx) = syncer.split();
+        // Try to spawn the LaserSubscriber task for real-time subscriptions.
+        // If it fails (e.g., invalid API key), cache will still work but updates will be RPC-only (slower).
+        let syncer = match DlpSyncer::start(laser.endpoint, laser.api_key).await {
+            Ok(syncer) => {
+                let (syncer, updates_rx) = syncer.split();
+                let min_capacity = CHANNEL_CAPACITY.min(max_cached_delegations);
+                let this = Arc::new(Self {
+                    db: HashCache::with_capacity(min_capacity, max_cached_delegations).into(),
+                    syncer: Some(syncer),
+                    routes,
+                });
+
+                // Spawn the cache updater task to process notifications from LaserSubscriber.
+                let updater = this.clone().updater(updates_rx);
+                tokio::spawn(tokio::task::unconstrained(updater));
+
+                return this;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to connect to Laser Stream: {:?}. \
+                    Delegations will be fetched via RPC (slower but functional). \
+                    For production, configure a valid Helius API key.",
+                    e
+                );
+                None
+            }
+        };
 
         let min_capacity = CHANNEL_CAPACITY.min(max_cached_delegations);
-        let this = Arc::new(Self {
+        Arc::new(Self {
             db: HashCache::with_capacity(min_capacity, max_cached_delegations).into(),
             syncer,
             routes,
-        });
-
-        // Spawn the cache updater task to process notifications from LaserSubscriber.
-        let updater = this.clone().updater(updates_rx);
-        tokio::spawn(tokio::task::unconstrained(updater));
-
-        this
+        })
     }
 
     /// Gets the delegation authority for a given account, if it exists.
@@ -181,23 +198,28 @@ impl DelegationsCache {
     ) {
         if let (Some(evicted), _) = vacant_entry.put_entry(record) {
             // If an entry was evicted, unsubscribe from its real-time updates.
-            if self
-                .syncer
-                .unsubscribe(evicted.0.to_bytes())
-                .await
-                .is_none()
-            {
-                tracing::error!("Failed to send unsubscribe for evicted entry, syncer terminated");
+            if let Some(syncer) = &self.syncer {
+                if syncer
+                    .unsubscribe(evicted.0.to_bytes())
+                    .await
+                    .is_none()
+                {
+                    tracing::error!("Failed to send unsubscribe for evicted entry, syncer terminated");
+                }
             }
         };
     }
 
     /// Subscribes to real-time updates for an account PDA.
+    /// If Laser Stream is not available, returns 0 (no slot info).
     async fn subscribe(&self, account: Pubkey) -> u64 {
-        self.syncer
-            .subscribe(account.to_bytes())
-            .await
-            .unwrap_or_default()
+        match &self.syncer {
+            Some(syncer) => syncer
+                .subscribe(account.to_bytes())
+                .await
+                .unwrap_or_default(),
+            None => 0, // No real-time updates available
+        }
     }
 
     /// The background task that processes notifications from the `LaserSubscriber`.
