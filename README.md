@@ -368,6 +368,16 @@ RUST_LOG=info cargo run-local
 
 This will start the router listening on `http://localhost:8080` and route requests to your local validator.
 
+4. Verify the router is working by checking the routes:
+
+```bash
+curl -X POST http://localhost:8080 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getRoutes","params":[]}'
+```
+
+This should return the ER record information from your local validator.
+
 ## Deployment
 
 To deploy the router, compile the project in release mode:
@@ -379,7 +389,7 @@ cargo build --release
 Then, execute the router with the specified configuration file:
 
 ```sh
-magicblock-rpc-router config.toml
+./target/release/magicblock-rpc-router config.toml
 ```
 
 The service will initiate and begin accepting connections.
