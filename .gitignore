@@ -3,6 +3,8 @@
 .claude
 config.toml
 **/test-ledger*
+local-validator-setup/
+test/
 
 # Added by cargo
 #
