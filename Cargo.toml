@@ -1,7 +1,3 @@
-[workspace]
-members = [".", "local-validator-setup"]
-resolver = "2"
-
 [package]
 name = "magicblock-rpc-router"
 version = "0.1.0"
