@@ -1273,8 +1273,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "helius-laserstream"
 version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aac2e134f07de8d6700ec639f3404c1deafa6b63a1ef1e3414b8ad76d382b16"
+source = "git+https://github.com/magicblock-labs/laserstream-sdk?branch=v0.2.8%2Bconn-fix#1355272a831cd31dcc4b440fd5f60fb3dbf01e51"
 dependencies = [
  "async-stream",
  "bs58",
@@ -2129,7 +2128,7 @@ dependencies = [
 [[package]]
 name = "magicblock-sync"
 version = "0.1.0"
-source = "git+https://github.com/magicblock-labs/magicblock-sync.git?rev=c85323#c853232c2dab1c60949f8ecc60f3182229428c46"
+source = "git+https://github.com/magicblock-labs/magicblock-sync.git?rev=66297fc53f0b9bb#66297fc53f0b9bbc67cc7edd168eef99aa93c808"
 dependencies = [
  "futures",
  "helius-laserstream",
