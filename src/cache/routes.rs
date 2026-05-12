@@ -35,6 +35,10 @@ use crate::{
     RouterResult,
 };
 
+const PROXIMITY_PING_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_PROXIMITY_PING_FAILURES: u8 = 3;
+const STALE_PROXIMITY_MULTIPLIER: u64 = 3;
+
 /// Routes manager, keeps an up to date mapping between ER identities and their FQDNs
 pub struct RoutingTable {
     /// List of ER nodes and their connection handles
@@ -47,6 +51,7 @@ pub struct RoutingTable {
     dispatcher_tx: Sender<Subscription>,
     /// Channel endpoint to send websocket updates on routes back to routes manager
     upstream_state_tx: Sender<WsUpstreamState>,
+    proximity_stale_after: Duration,
 }
 
 impl RoutingTable {
@@ -85,6 +90,9 @@ impl RoutingTable {
             base_chain,
             dispatcher_tx,
             upstream_state_tx,
+            proximity_stale_after: Duration::from_secs(
+                proximity_ping_frequency.saturating_mul(STALE_PROXIMITY_MULTIPLIER),
+            ),
         });
         let accounts = this
             .base_chain()
@@ -129,7 +137,11 @@ impl RoutingTable {
         let mut node_id = Pubkey::default();
         let mut client = self.base_chain().client.clone();
         let mut min_proximity = u64::MAX;
+        let now = Instant::now();
         self.inner.iter_sync(|pubkey, record| {
+            if !record.has_fresh_proximity(now, self.proximity_stale_after) {
+                return true;
+            }
             if min_proximity <= record.proximity_micros {
                 return true;
             }
@@ -164,11 +176,18 @@ impl RoutingTable {
             return;
         };
 
-        let Some(upstream) = UpstreamRecord::new_from_er_record(&record).await else {
+        let Some(mut upstream) = UpstreamRecord::new_from_er_record(&record).await else {
             tracing::warn!(%pubkey, "domain registry account didn't have proper FQDN");
             return;
         };
         let identity = *record.identity();
+        if let Some(current) = self.inner.get_sync(&identity) {
+            if current.ws_url.as_str() == upstream.ws_url.as_str() {
+                upstream.proximity_micros = current.proximity_micros;
+                upstream.last_proximity_update = current.last_proximity_update;
+                upstream.consecutive_ping_failures = current.consecutive_ping_failures;
+            }
+        }
         let _ = self.pda_to_identity.insert_sync(pubkey, identity);
         let _ = self
             .upstream_state_tx
@@ -248,34 +267,48 @@ impl RoutingTable {
                         }
                     }
                     ping = pings.next(), if !pings.is_empty() => {
-                        let Some(Ok((pubkey, duration))): Option<Result<(Pubkey, Duration), _>> = ping else {
-                            tracing::warn!(?ping, "failed to perform ping request");
+                        let Some(ping) = ping else {
                             continue;
                         };
-                        let Some(mut record) = self.inner.get_sync(&pubkey) else {
-                            continue;
-                        };
+                        match ping {
+                            Ok((pubkey, duration)) => {
+                                let Some(mut record) = self.inner.get_sync(&pubkey) else {
+                                    continue;
+                                };
 
-                        let record = record.get_mut();
-                        let last = duration.as_micros() as u64;
-                        if record.proximity_micros == u64::MAX {
-                            record.proximity_micros = last;
-                        } else {
-                            record.proximity_micros =
-                                ((record.proximity_micros * 85) + last * 15) / 100;
+                                let record = record.get_mut();
+                                record.update_proximity(duration);
+                                let last = duration.as_micros() as u64;
+                                let host = record.ws_url.host_str().unwrap_or_default();
+                                tracing::debug!(
+                                    "ping to {host} took {last}μs, avg: {}μs",
+                                    record.proximity_micros
+                                );
+                            }
+                            Err(pubkey) => {
+                                let Some(mut record) = self.inner.get_sync(&pubkey) else {
+                                    continue;
+                                };
+                                let record = record.get_mut();
+                                record.register_ping_failure();
+                                let host = record.ws_url.host_str().unwrap_or_default();
+                                tracing::warn!(
+                                    host,
+                                    failures = record.consecutive_ping_failures,
+                                    "failed to perform ping request"
+                                );
+                            }
                         }
-                        let host =  record.ws_url.host_str().unwrap_or_default();
-                        tracing::debug!(
-                            "ping to {host} took {last}μs, avg: {}μs",
-                            record.proximity_micros
-                        );
                     }
                     _ = ping_ticker.tick() => {
                         self.inner.iter_sync(|&pubkey, record| {
                             let client = record.client.clone();
                             let task = async move {
                                 let start = Instant::now();
-                                client.get_identity().await.map(|_| (pubkey, start.elapsed()))
+                                match time::timeout(PROXIMITY_PING_TIMEOUT, client.get_identity()).await {
+                                    Ok(Ok(_)) => Ok((pubkey, start.elapsed())),
+                                    Ok(Err(_)) | Err(_) => Err(pubkey),
+                                }
                             };
                             pings.push(task);
                             true
@@ -299,6 +332,8 @@ pub struct UpstreamRecord {
     pub client: Arc<RpcClient>,
     pub ws_url: Arc<Url>,
     pub proximity_micros: u64,
+    pub last_proximity_update: Option<Instant>,
+    pub consecutive_ping_failures: u8,
     pub info: Option<RouteInfo>,
 }
 
@@ -316,6 +351,8 @@ impl UpstreamRecord {
             client,
             ws_url: Arc::new(fqdn),
             proximity_micros: u64::MAX,
+            last_proximity_update: None,
+            consecutive_ping_failures: 0,
             info,
         })
     }
@@ -330,5 +367,33 @@ impl UpstreamRecord {
         };
         let info = RouteInfo::from(er_record);
         Self::new_from_url(fqdn, Some(info)).await
+    }
+
+    fn has_fresh_proximity(&self, now: Instant, stale_after: Duration) -> bool {
+        if self.consecutive_ping_failures >= MAX_PROXIMITY_PING_FAILURES {
+            return false;
+        }
+        let Some(updated_at) = self.last_proximity_update else {
+            return false;
+        };
+        now.duration_since(updated_at) <= stale_after
+    }
+
+    fn update_proximity(&mut self, duration: Duration) {
+        let last = duration.as_micros() as u64;
+        if self.proximity_micros == u64::MAX {
+            self.proximity_micros = last;
+        } else {
+            self.proximity_micros = ((self.proximity_micros * 85) + last * 15) / 100;
+        }
+        self.last_proximity_update = Some(Instant::now());
+        self.consecutive_ping_failures = 0;
+    }
+
+    fn register_ping_failure(&mut self) {
+        self.consecutive_ping_failures = self.consecutive_ping_failures.saturating_add(1);
+        if self.consecutive_ping_failures >= MAX_PROXIMITY_PING_FAILURES {
+            self.proximity_micros = u64::MAX;
+        }
     }
 }
