@@ -25,6 +25,7 @@ use url::Url;
 
 use crate::{
     cache::transactions::RemoteHandle,
+    error::RouterError,
     pubsub::{
         dispatch::WsUpstreamState,
         notification::{deserialize_account, deserialize_field, PubsubMessage},
@@ -52,6 +53,7 @@ pub struct RoutingTable {
     /// Channel endpoint to send websocket updates on routes back to routes manager
     upstream_state_tx: Sender<WsUpstreamState>,
     proximity_stale_after: Duration,
+    static_er_identity: Option<Pubkey>,
 }
 
 impl RoutingTable {
@@ -60,6 +62,7 @@ impl RoutingTable {
         dispatcher_tx: Sender<Subscription>,
         upstream_state_tx: Sender<WsUpstreamState>,
         proximity_ping_frequency: u64,
+        static_er_identity: Option<Pubkey>,
         ready: Arc<Notify>,
     ) -> RouterResult<Arc<Self>> {
         let mut upstreams = Vec::with_capacity(base_chain_urls.len());
@@ -93,6 +96,7 @@ impl RoutingTable {
             proximity_stale_after: Duration::from_secs(
                 proximity_ping_frequency.saturating_mul(STALE_PROXIMITY_MULTIPLIER),
             ),
+            static_er_identity,
         });
         let accounts = this
             .base_chain()
@@ -101,6 +105,11 @@ impl RoutingTable {
             .await?;
         for (pubkey, account) in accounts {
             this.insert_entry(pubkey, account).await;
+        }
+        if let Some(identity) = static_er_identity {
+            if this.inner.get_sync(&identity).is_none() {
+                return Err(RouterError::UnknownErNode(identity));
+            }
         }
         ready.notified().await;
         tokio::spawn(this.clone().updater(proximity_ping_frequency));
@@ -133,7 +142,15 @@ impl RoutingTable {
         &self.base_chain.upstreams[index]
     }
 
-    pub fn closest_node(&self) -> (SerdePubkey, Arc<RpcClient>) {
+    pub fn closest_node(&self) -> RouterResult<(SerdePubkey, Arc<RpcClient>)> {
+        if let Some(identity) = self.static_er_identity {
+            let record = self
+                .inner
+                .get_sync(&identity)
+                .ok_or(RouterError::UnknownErNode(identity))?;
+            return Ok((SerdePubkey(identity), record.client.clone()));
+        }
+
         let mut node_id = Pubkey::default();
         let mut client = self.base_chain().client.clone();
         let mut min_proximity = u64::MAX;
@@ -150,7 +167,7 @@ impl RoutingTable {
             client = record.client.clone();
             true
         });
-        (SerdePubkey(node_id), client)
+        Ok((SerdePubkey(node_id), client))
     }
 
     pub async fn all_routes(&self) -> Vec<RouteInfo> {
@@ -301,6 +318,9 @@ impl RoutingTable {
                         }
                     }
                     _ = ping_ticker.tick() => {
+                        if self.static_er_identity.is_some() {
+                            continue;
+                        }
                         self.inner.iter_sync(|&pubkey, record| {
                             let client = record.client.clone();
                             let task = async move {

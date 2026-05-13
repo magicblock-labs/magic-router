@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use cache::{
     delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
@@ -13,6 +13,7 @@ use rpc::{
 };
 use scc::HashCache;
 use server::{http::HttpServer, websocket::WebsocketServer};
+use solana_pubkey::Pubkey;
 use tokio::sync::{mpsc, Notify};
 
 pub mod accounts;
@@ -30,6 +31,14 @@ pub type RouterResult<T> = Result<T, RouterError>;
 /// Start the router service, this will start accpeting http and
 /// websocket requests on the same provided port
 pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
+    let static_er_identity = config
+        .routing
+        .static_er_identity
+        .as_deref()
+        .map(Pubkey::from_str)
+        .transpose()
+        .map_err(RouterError::decode_error)?;
+
     let server = Server::builder()
         .enable_ws_ping(
             PingConfig::new()
@@ -58,6 +67,7 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         requests_tx.clone(),
         upstream_state_tx,
         config.proximity_ping_frequency_sec,
+        static_er_identity,
         ready,
     )
     .await?;
