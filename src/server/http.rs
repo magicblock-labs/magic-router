@@ -207,7 +207,7 @@ impl RoHttpRpcServer for HttpServer {
     }
 
     async fn identity(&self) -> RpcResult<RpcIdentity> {
-        let (identity, client) = self.routes.closest_node();
+        let (identity, client) = self.routes.closest_node()?;
         Ok(RpcIdentity {
             identity,
             fqdn: client.url(),
@@ -341,7 +341,7 @@ impl RoHttpRpcServer for HttpServer {
     }
 
     async fn latest_blockhash(&self) -> RpcResult<Response<RpcBlockhash>> {
-        let (_, client) = self.routes.closest_node();
+        let (_, client) = self.routes.closest_node()?;
         let (hash, slot) = client
             .get_latest_blockhash_with_commitment(CommitmentConfig::confirmed())
             .await
