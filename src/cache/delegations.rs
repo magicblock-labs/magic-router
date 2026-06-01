@@ -102,7 +102,10 @@ impl DelegationsCache {
             Entry::Vacant(vacant_entry) => {
                 tracing::debug!(%pubkey, %pda, "tracking delegation for");
                 // On a cache miss, subscribe to get a recent slot, then fetch and insert.
-                let slot = self.subscribe(pda).await - MIN_CONTEXT_SLOT_ROLLBACK;
+                let slot = self
+                    .subscribe(pda)
+                    .await
+                    .saturating_sub(MIN_CONTEXT_SLOT_ROLLBACK);
                 let new_entry_data = self.fetch(pda, slot).await;
                 let record_to_return = new_entry_data.record.clone();
                 self.insert_new(vacant_entry, new_entry_data).await;
