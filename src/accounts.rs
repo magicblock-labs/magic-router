@@ -12,6 +12,8 @@ pub struct DelegationEntry {
     pub slot: u64,
     /// Optional parsed delegation record
     pub record: Option<ParsedDelegationRecord>,
+    /// Min context slot to use while a cache fill is pending.
+    pub pending_min_context_slot: Option<u64>,
 }
 
 /// Derives the Delegation Record PDA from a delegated account address.

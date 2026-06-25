@@ -96,16 +96,24 @@ impl DelegationsCache {
     pub async fn get_record(&self, pubkey: Pubkey) -> Option<ParsedDelegationRecord> {
         let pda = delegation_record_pda_from_delegated_account(&pubkey);
 
-        if let Some((slot, record)) = self
+        if let Some((slot, record, pending_min_context_slot)) = self
             .db
-            .read_async(&pda, |_, entry| (entry.slot, entry.record.clone()))
+            .read_async(&pda, |_, entry| {
+                (
+                    entry.slot,
+                    entry.record.clone(),
+                    entry.pending_min_context_slot,
+                )
+            })
             .await
         {
             if slot != 0 {
                 return record;
             }
 
-            return self.merge_fetched(pda, self.fetch(pda, None).await).await;
+            return self
+                .merge_fetched(pda, self.fetch(pda, pending_min_context_slot).await)
+                .await;
         }
 
         tracing::debug!(%pubkey, %pda, "tracking delegation for");
@@ -122,6 +130,7 @@ impl DelegationsCache {
                 DelegationEntry {
                     record: None,
                     slot: 0,
+                    pending_min_context_slot: min_context_slot,
                 },
             )
             .await;
@@ -167,6 +176,7 @@ impl DelegationsCache {
                     return DelegationEntry {
                         record,
                         slot: context.slot,
+                        pending_min_context_slot: None,
                     };
                 }
                 Ok(RpcResponse {
@@ -177,6 +187,7 @@ impl DelegationsCache {
                     return DelegationEntry {
                         record: None,
                         slot: context.slot,
+                        pending_min_context_slot: None,
                     };
                 }
                 Err(error) => {
@@ -190,6 +201,7 @@ impl DelegationsCache {
         DelegationEntry {
             record: None,
             slot: 0,
+            pending_min_context_slot: None,
         }
     }
 
@@ -228,11 +240,7 @@ impl DelegationsCache {
                     occupied_entry.get().record.clone()
                 }
             }
-            Entry::Vacant(vacant_entry) => {
-                let record_to_return = new_entry_data.record.clone();
-                self.insert_new(vacant_entry, new_entry_data).await;
-                record_to_return
-            }
+            Entry::Vacant(_) => new_entry_data.record,
         }
     }
 
@@ -304,5 +312,6 @@ impl DelegationsCache {
         let entry_mut = cached_entry.get_mut();
         entry_mut.record = new_record;
         entry_mut.slot = slot;
+        entry_mut.pending_min_context_slot = None;
     }
 }
