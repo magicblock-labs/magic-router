@@ -95,29 +95,55 @@ impl DelegationsCache {
     /// ensuring that subsequent reads are fast and subsequent updates are pushed to the cache.
     pub async fn get_record(&self, pubkey: Pubkey) -> Option<ParsedDelegationRecord> {
         let pda = delegation_record_pda_from_delegated_account(&pubkey);
-        let entry = self.db.entry_async(pda).await;
 
-        match entry {
-            Entry::Occupied(occupied_entry) => occupied_entry.get().record.clone(),
-            Entry::Vacant(vacant_entry) => {
-                tracing::debug!(%pubkey, %pda, "tracking delegation for");
-                // On a cache miss, subscribe to get a recent slot, then fetch and insert.
-                let slot = self
-                    .subscribe(pda)
-                    .await
-                    .saturating_sub(MIN_CONTEXT_SLOT_ROLLBACK);
-                let new_entry_data = self.fetch(pda, slot).await;
-                let record_to_return = new_entry_data.record.clone();
-                self.insert_new(vacant_entry, new_entry_data).await;
-                record_to_return
+        if let Some((slot, record, pending_min_context_slot)) = self
+            .db
+            .read_async(&pda, |_, entry| {
+                (
+                    entry.slot,
+                    entry.record.clone(),
+                    entry.pending_min_context_slot,
+                )
+            })
+            .await
+        {
+            if slot != 0 {
+                return record;
             }
+
+            return self
+                .merge_fetched(pda, self.fetch(pda, pending_min_context_slot).await)
+                .await;
         }
+
+        tracing::debug!(%pubkey, %pda, "tracking delegation for");
+        // On a cache miss, subscribe to get a recent slot, then fetch and insert.
+        let Some(subscription_slot) = self.subscribe(pda).await else {
+            return self.fetch(pda, None).await.record;
+        };
+        let min_context_slot = subscription_slot.checked_sub(MIN_CONTEXT_SLOT_ROLLBACK);
+
+        if let Entry::Vacant(vacant_entry) = self.db.entry_async(pda).await {
+            // Slot 0 marks the cache fill as pending so Laser updates can merge before the RPC fetch returns.
+            self.insert_new(
+                vacant_entry,
+                DelegationEntry {
+                    record: None,
+                    slot: 0,
+                    pending_min_context_slot: min_context_slot,
+                },
+            )
+            .await;
+        }
+
+        self.merge_fetched(pda, self.fetch(pda, min_context_slot).await)
+            .await
     }
 
     /// Fetches a delegation record from the chain with a retry mechanism.
     ///
-    /// It uses `min_context_slot` to ensure the RPC response is not stale.
-    pub async fn fetch(&self, pda: Pubkey, min_slot: u64) -> DelegationEntry {
+    /// It uses `min_context_slot` to ensure the RPC response is not stale, when available.
+    pub async fn fetch(&self, pda: Pubkey, min_context_slot: Option<u64>) -> DelegationEntry {
         let rpc_client = &self.routes.base_chain().client;
 
         for attempt in 0..=MAX_ACCOUNT_REFETCH_ATTEMPTS {
@@ -132,7 +158,7 @@ impl DelegationsCache {
                     RpcAccountInfoConfig {
                         encoding: Some(UiAccountEncoding::Base64),
                         commitment: Some(CommitmentConfig::confirmed()),
-                        min_context_slot: Some(min_slot),
+                        min_context_slot,
                         ..Default::default()
                     },
                 )
@@ -150,6 +176,7 @@ impl DelegationsCache {
                     return DelegationEntry {
                         record,
                         slot: context.slot,
+                        pending_min_context_slot: None,
                     };
                 }
                 Ok(RpcResponse {
@@ -160,6 +187,7 @@ impl DelegationsCache {
                     return DelegationEntry {
                         record: None,
                         slot: context.slot,
+                        pending_min_context_slot: None,
                     };
                 }
                 Err(error) => {
@@ -173,6 +201,7 @@ impl DelegationsCache {
         DelegationEntry {
             record: None,
             slot: 0,
+            pending_min_context_slot: None,
         }
     }
 
@@ -182,7 +211,8 @@ impl DelegationsCache {
         vacant_entry: VacantEntry<'_, Pubkey, DelegationEntry>,
         record: DelegationEntry,
     ) {
-        if let (Some(evicted), _) = vacant_entry.put_entry(record) {
+        let evicted = vacant_entry.put_entry(record).0;
+        if let Some(evicted) = evicted {
             // If an entry was evicted, unsubscribe from its real-time updates.
             if self
                 .syncer
@@ -195,12 +225,32 @@ impl DelegationsCache {
         };
     }
 
+    async fn merge_fetched(
+        &self,
+        pda: Pubkey,
+        new_entry_data: DelegationEntry,
+    ) -> Option<ParsedDelegationRecord> {
+        match self.db.entry_async(pda).await {
+            Entry::Occupied(mut occupied_entry) => {
+                if occupied_entry.get().slot < new_entry_data.slot {
+                    let record_to_return = new_entry_data.record.clone();
+                    *occupied_entry.get_mut() = new_entry_data;
+                    record_to_return
+                } else {
+                    occupied_entry.get().record.clone()
+                }
+            }
+            Entry::Vacant(_) => new_entry_data.record,
+        }
+    }
+
     /// Subscribes to real-time updates for an account PDA.
-    async fn subscribe(&self, account: Pubkey) -> u64 {
-        self.syncer
-            .subscribe(account.to_bytes())
-            .await
-            .unwrap_or_default()
+    async fn subscribe(&self, account: Pubkey) -> Option<u64> {
+        let slot = self.syncer.subscribe(account.to_bytes()).await;
+        if slot.is_none() {
+            tracing::error!(%account, "Failed to send subscribe for delegation account, syncer terminated");
+        }
+        slot
     }
 
     /// The background task that processes notifications from the `LaserSubscriber`.
@@ -262,5 +312,6 @@ impl DelegationsCache {
         let entry_mut = cached_entry.get_mut();
         entry_mut.record = new_record;
         entry_mut.slot = slot;
+        entry_mut.pending_min_context_slot = None;
     }
 }
