@@ -1,3 +1,4 @@
+use futures::{channel::oneshot, future::Shared};
 use solana_pubkey::{pubkey, Pubkey};
 
 use crate::types::ParsedDelegationRecord;
@@ -5,6 +6,8 @@ pub const DELEGATION_PROGRAM_STR: &str = "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMAR
 pub const DELEGATION_PROGRAM_ID: Pubkey = pubkey!("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 /// The tag used as a seed for the delegation record PDA.
 pub const DELEGATION_RECORD_TAG: &[u8] = b"delegation";
+
+pub type PendingDelegationFill = Shared<oneshot::Receiver<Option<ParsedDelegationRecord>>>;
 
 /// Delegation metadata for account
 pub struct DelegationEntry {
@@ -14,6 +17,8 @@ pub struct DelegationEntry {
     pub record: Option<ParsedDelegationRecord>,
     /// Min context slot to use while a cache fill is pending.
     pub pending_min_context_slot: Option<u64>,
+    /// Shared result for callers waiting on the cache fill owner.
+    pub pending_fill: Option<PendingDelegationFill>,
 }
 
 /// Derives the Delegation Record PDA from a delegated account address.

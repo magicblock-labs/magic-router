@@ -8,6 +8,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use futures::{channel::oneshot, FutureExt};
 use magicblock_sync::{AccountUpdate, DlpSyncChannelsRequester, DlpSyncer};
 use scc::{
     hash_cache::{Entry, VacantEntry},
@@ -20,7 +21,9 @@ use solana_rpc_client_api::{config::RpcAccountInfoConfig, response::Response as 
 use tokio::sync::mpsc::Receiver;
 
 use crate::{
-    accounts::{delegation_record_pda_from_delegated_account, DelegationEntry},
+    accounts::{
+        delegation_record_pda_from_delegated_account, DelegationEntry, PendingDelegationFill,
+    },
     config::LaserStreamConfig,
     types::ParsedDelegationRecord,
 };
@@ -96,64 +99,134 @@ impl DelegationsCache {
     pub async fn get_record(&self, pubkey: Pubkey) -> Option<ParsedDelegationRecord> {
         let pda = delegation_record_pda_from_delegated_account(&pubkey);
 
-        if let Some((slot, record, pending_min_context_slot)) = self
-            .db
-            .read_async(&pda, |_, entry| {
-                (
-                    entry.slot,
-                    entry.record.clone(),
-                    entry.pending_min_context_slot,
-                )
-            })
-            .await
-        {
-            if slot != 0 {
-                return record;
-            }
+        loop {
+            if let Some((slot, record, pending_min_context_slot, pending_fill)) = self
+                .db
+                .read_async(&pda, |_, entry| {
+                    (
+                        entry.slot,
+                        entry.record.clone(),
+                        entry.pending_min_context_slot,
+                        entry.pending_fill.clone(),
+                    )
+                })
+                .await
+            {
+                if slot != 0 {
+                    return record;
+                }
 
-            if pending_min_context_slot.is_some() {
+                if let Some(pending_fill) = pending_fill {
+                    match pending_fill.clone().await {
+                        Ok(record) => return record,
+                        Err(_) => {
+                            // The fill owner was cancelled. Remove only its placeholder
+                            // so another caller can retry initialization.
+                            self.remove_pending_fill(pda, &pending_fill).await;
+                            continue;
+                        }
+                    }
+                }
+
                 return self
-                    .merge_fetched(pda, self.fetch(pda, pending_min_context_slot).await)
+                    .merge_fetched(pda, self.fetch(pda, pending_min_context_slot).await, None)
                     .await;
             }
-            // Subscribe below before fetching an entry that is still initializing.
-        }
 
-        tracing::debug!(%pubkey, %pda, "tracking delegation for");
-        // On a cache miss, insert the pending entry before subscribing, so the
-        // updates the syncer replays at subscription time (and live updates
-        // racing the fill) have an entry to land in instead of being dropped.
-        if let Entry::Vacant(vacant_entry) = self.db.entry_async(pda).await {
-            // Slot 0 marks the cache fill as pending so Laser updates can merge before the RPC fetch returns.
-            self.insert_new(
-                vacant_entry,
-                DelegationEntry {
-                    record: None,
-                    slot: 0,
-                    pending_min_context_slot: None,
-                },
-            )
-            .await;
-        }
+            tracing::debug!(%pubkey, %pda, "tracking delegation for");
+            let (fill_tx, fill_rx) = oneshot::channel();
+            let pending_fill = fill_rx.shared();
+            // On a cache miss, insert the pending entry before subscribing, so the
+            // updates the syncer replays at subscription time (and live updates
+            // racing the fill) have an entry to land in instead of being dropped.
+            let inserted = if let Entry::Vacant(vacant_entry) = self.db.entry_async(pda).await {
+                // Slot 0 marks the cache fill as pending so Laser updates can merge before the RPC fetch returns.
+                self.insert_new(
+                    vacant_entry,
+                    DelegationEntry {
+                        record: None,
+                        slot: 0,
+                        pending_min_context_slot: None,
+                        pending_fill: Some(pending_fill.clone()),
+                    },
+                )
+                .await;
+                true
+            } else {
+                false
+            };
 
-        let Some(subscription_slot) = self.subscribe(pda).await else {
-            // Without a live subscription the entry can never be kept coherent:
-            // drop it and serve this request from an uncached fetch.
-            self.db.remove_async(&pda).await;
-            return self.fetch(pda, None).await.record;
-        };
-        let min_context_slot = subscription_slot.checked_sub(MIN_CONTEXT_SLOT_ROLLBACK);
-
-        // Preserve the fetch constraint for concurrent readers while the fill
-        // is pending; a replayed update may have already completed the fill.
-        if let Entry::Occupied(mut occupied_entry) = self.db.entry_async(pda).await {
-            if occupied_entry.get().slot == 0 {
-                occupied_entry.get_mut().pending_min_context_slot = min_context_slot;
+            if !inserted {
+                continue;
             }
-        }
 
-        self.merge_fetched(pda, self.fetch(pda, min_context_slot).await)
+            let Some(subscription_slot) = self.subscribe(pda).await else {
+                // Without a live subscription the entry can never be kept coherent:
+                // drop only the placeholder owned by this request.
+                if self.remove_pending_fill(pda, &pending_fill).await {
+                    let record = self.fetch(pda, None).await.record;
+                    let _ = fill_tx.send(record.clone());
+                    return record;
+                }
+                continue;
+            };
+            let min_context_slot = subscription_slot.checked_sub(MIN_CONTEXT_SLOT_ROLLBACK);
+
+            let owns_pending_fill =
+                if let Entry::Occupied(mut occupied_entry) = self.db.entry_async(pda).await {
+                    if occupied_entry.get().slot == 0
+                        && occupied_entry
+                            .get()
+                            .pending_fill
+                            .as_ref()
+                            .is_some_and(|pending| pending.ptr_eq(&pending_fill))
+                    {
+                        occupied_entry.get_mut().pending_min_context_slot = min_context_slot;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+            if !owns_pending_fill {
+                continue;
+            }
+
+            let record = self
+                .merge_fetched(
+                    pda,
+                    self.fetch(pda, min_context_slot).await,
+                    Some(&pending_fill),
+                )
+                .await;
+            if let Entry::Occupied(mut occupied_entry) = self.db.entry_async(pda).await {
+                if occupied_entry
+                    .get()
+                    .pending_fill
+                    .as_ref()
+                    .is_some_and(|pending| pending.ptr_eq(&pending_fill))
+                {
+                    occupied_entry.get_mut().pending_fill = None;
+                }
+            }
+            let _ = fill_tx.send(record.clone());
+            return record;
+        }
+    }
+
+    async fn remove_pending_fill(&self, pda: Pubkey, pending_fill: &PendingDelegationFill) -> bool {
+        self.db
+            .remove_if_async(&pda, |entry| {
+                entry.slot == 0
+                    && entry
+                        .pending_fill
+                        .as_ref()
+                        .is_some_and(|pending| pending.ptr_eq(pending_fill))
+            })
             .await
+            .is_some()
     }
 
     /// Fetches a delegation record from the chain with a retry mechanism.
@@ -193,6 +266,7 @@ impl DelegationsCache {
                         record,
                         slot: context.slot,
                         pending_min_context_slot: None,
+                        pending_fill: None,
                     };
                 }
                 Ok(RpcResponse {
@@ -204,6 +278,7 @@ impl DelegationsCache {
                         record: None,
                         slot: context.slot,
                         pending_min_context_slot: None,
+                        pending_fill: None,
                     };
                 }
                 Err(error) => {
@@ -218,6 +293,7 @@ impl DelegationsCache {
             record: None,
             slot: 0,
             pending_min_context_slot: None,
+            pending_fill: None,
         }
     }
 
@@ -245,9 +321,20 @@ impl DelegationsCache {
         &self,
         pda: Pubkey,
         new_entry_data: DelegationEntry,
+        pending_fill: Option<&PendingDelegationFill>,
     ) -> Option<ParsedDelegationRecord> {
         match self.db.entry_async(pda).await {
             Entry::Occupied(mut occupied_entry) => {
+                if occupied_entry
+                    .get()
+                    .pending_fill
+                    .as_ref()
+                    .is_some_and(|pending| {
+                        pending_fill.is_none_or(|pending_fill| !pending.ptr_eq(pending_fill))
+                    })
+                {
+                    return new_entry_data.record;
+                }
                 if occupied_entry.get().slot < new_entry_data.slot {
                     let record_to_return = new_entry_data.record.clone();
                     *occupied_entry.get_mut() = new_entry_data;
@@ -329,5 +416,6 @@ impl DelegationsCache {
         entry_mut.record = new_record;
         entry_mut.slot = slot;
         entry_mut.pending_min_context_slot = None;
+        entry_mut.pending_fill = None;
     }
 }
