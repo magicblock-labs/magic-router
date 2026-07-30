@@ -31,7 +31,7 @@ default-features = false
 
 [dependencies.magicblock-sync]
 git = "https://github.com/magicblock-labs/magicblock-sync.git"
-rev = "66297fc53f0b9bb"
+rev = "1c5d6a8b3969dd91c8d79755c0c0da07b04c9a85"
 
 
 [dependencies]

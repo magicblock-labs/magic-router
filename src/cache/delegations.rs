@@ -117,12 +117,9 @@ impl DelegationsCache {
         }
 
         tracing::debug!(%pubkey, %pda, "tracking delegation for");
-        // On a cache miss, subscribe to get a recent slot, then fetch and insert.
-        let Some(subscription_slot) = self.subscribe(pda).await else {
-            return self.fetch(pda, None).await.record;
-        };
-        let min_context_slot = subscription_slot.checked_sub(MIN_CONTEXT_SLOT_ROLLBACK);
-
+        // On a cache miss, insert the pending entry before subscribing, so the
+        // updates the syncer replays at subscription time (and live updates
+        // racing the fill) have an entry to land in instead of being dropped.
         if let Entry::Vacant(vacant_entry) = self.db.entry_async(pda).await {
             // Slot 0 marks the cache fill as pending so Laser updates can merge before the RPC fetch returns.
             self.insert_new(
@@ -130,10 +127,26 @@ impl DelegationsCache {
                 DelegationEntry {
                     record: None,
                     slot: 0,
-                    pending_min_context_slot: min_context_slot,
+                    pending_min_context_slot: None,
                 },
             )
             .await;
+        }
+
+        let Some(subscription_slot) = self.subscribe(pda).await else {
+            // Without a live subscription the entry can never be kept coherent:
+            // drop it and serve this request from an uncached fetch.
+            self.db.remove_async(&pda).await;
+            return self.fetch(pda, None).await.record;
+        };
+        let min_context_slot = subscription_slot.checked_sub(MIN_CONTEXT_SLOT_ROLLBACK);
+
+        // Preserve the fetch constraint for concurrent readers while the fill
+        // is pending; a replayed update may have already completed the fill.
+        if let Entry::Occupied(mut occupied_entry) = self.db.entry_async(pda).await {
+            if occupied_entry.get().slot == 0 {
+                occupied_entry.get_mut().pending_min_context_slot = min_context_slot;
+            }
         }
 
         self.merge_fetched(pda, self.fetch(pda, min_context_slot).await)
