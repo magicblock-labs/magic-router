@@ -111,9 +111,12 @@ impl DelegationsCache {
                 return record;
             }
 
-            return self
-                .merge_fetched(pda, self.fetch(pda, pending_min_context_slot).await)
-                .await;
+            if pending_min_context_slot.is_some() {
+                return self
+                    .merge_fetched(pda, self.fetch(pda, pending_min_context_slot).await)
+                    .await;
+            }
+            // Subscribe below before fetching an entry that is still initializing.
         }
 
         tracing::debug!(%pubkey, %pda, "tracking delegation for");
