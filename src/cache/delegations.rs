@@ -8,7 +8,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use futures::{channel::oneshot, FutureExt};
 use magicblock_sync::{AccountUpdate, DlpSyncChannelsRequester, DlpSyncer};
 use scc::{
     hash_cache::{Entry, VacantEntry},
@@ -117,7 +116,7 @@ impl DelegationsCache {
                 }
 
                 if let Some(pending_fill) = pending_fill {
-                    match pending_fill.clone().await {
+                    match pending_fill.result().await {
                         Ok(record) => return record,
                         Err(_) => {
                             // The fill owner was cancelled. Remove only its placeholder
@@ -134,8 +133,7 @@ impl DelegationsCache {
             }
 
             tracing::debug!(%pubkey, %pda, "tracking delegation for");
-            let (fill_tx, fill_rx) = oneshot::channel();
-            let pending_fill = fill_rx.shared();
+            let (fill_tx, pending_fill) = PendingDelegationFill::new();
             // On a cache miss, insert the pending entry before subscribing, so the
             // updates the syncer replays at subscription time (and live updates
             // racing the fill) have an entry to land in instead of being dropped.
@@ -194,13 +192,15 @@ impl DelegationsCache {
                 continue;
             }
 
-            let record = self
-                .merge_fetched(
-                    pda,
-                    self.fetch(pda, min_context_slot).await,
-                    Some(&pending_fill),
-                )
-                .await;
+            let record = tokio::select! {
+                fetched = self.fetch(pda, min_context_slot) => {
+                    self.merge_fetched(pda, fetched, Some(&pending_fill)).await
+                }
+                // A replayed or live stream update can install the record while
+                // the fetch is still retrying; serve it instead of keeping every
+                // waiter on this fill blocked behind the RPC backoff.
+                record = self.stream_fill(pda, &pending_fill) => record,
+            };
             if let Entry::Occupied(mut occupied_entry) = self.db.entry_async(pda).await {
                 if occupied_entry
                     .get()
@@ -213,6 +213,30 @@ impl DelegationsCache {
             }
             let _ = fill_tx.send(record.clone());
             return record;
+        }
+    }
+
+    /// Resolves with the installed record once a stream update fills the entry.
+    /// Never resolves if the entry is evicted first, so it must be raced
+    /// against a future that always completes.
+    async fn stream_fill(
+        &self,
+        pda: Pubkey,
+        pending_fill: &PendingDelegationFill,
+    ) -> Option<ParsedDelegationRecord> {
+        loop {
+            let filled = pending_fill.filled();
+            let installed = self
+                .db
+                .read_async(&pda, |_, entry| {
+                    (entry.slot != 0).then(|| entry.record.clone())
+                })
+                .await
+                .flatten();
+            if let Some(record) = installed {
+                return record;
+            }
+            filled.await;
         }
     }
 
@@ -416,6 +440,12 @@ impl DelegationsCache {
         entry_mut.record = new_record;
         entry_mut.slot = slot;
         entry_mut.pending_min_context_slot = None;
-        entry_mut.pending_fill = None;
+        let pending_fill = entry_mut.pending_fill.take();
+        // Release the entry before waking the fill owner, so the woken task
+        // observes the installed record.
+        drop(cached_entry);
+        if let Some(pending_fill) = pending_fill {
+            pending_fill.notify_filled();
+        }
     }
 }
