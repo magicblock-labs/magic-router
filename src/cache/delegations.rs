@@ -391,6 +391,9 @@ impl DelegationsCache {
                 AccountUpdate::Undelegated { record, slot } => {
                     self.update_cached_entry(record.into(), slot, None);
                 }
+                AccountUpdate::SyncInterrupted => {
+                    self.db.clear_async().await;
+                }
                 AccountUpdate::SyncTerminated => {
                     // On disconnect, remove entry to prevent serving stale data.
                     // They will be re-fetched on next access.
