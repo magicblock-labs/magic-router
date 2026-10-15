@@ -5,7 +5,7 @@ use cache::{
 };
 use config::RouterConfig;
 use error::RouterError;
-use jsonrpsee::server::{PingConfig, Server, ServerHandle};
+use jsonrpsee::server::{PingConfig, RpcServiceBuilder, Server, ServerHandle};
 use pubsub::dispatch::SubscriptionDispatcher;
 use rpc::{
     http::{RoHttpRpcServer, RwHttpRpcServer},
@@ -20,6 +20,7 @@ pub mod accounts;
 pub mod cache;
 pub mod config;
 pub mod error;
+mod metrics;
 pub mod pubsub;
 pub mod server;
 pub mod types;
@@ -46,8 +47,11 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
         )
         .max_connections(config.max_connections)
         .max_subscriptions_per_connection(config.max_subscriptions_per_connection)
+        .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(metrics::RpcMetrics))
         .set_http_middleware(
-            tower::ServiceBuilder::new().layer(tower_http::cors::CorsLayer::permissive()),
+            tower::ServiceBuilder::new()
+                .layer(tower_http::cors::CorsLayer::permissive())
+                .layer_fn(metrics::HttpMetrics),
         )
         .build(config.listen_address)
         .await?;
@@ -101,6 +105,8 @@ pub async fn run(config: RouterConfig) -> RouterResult<ServerHandle> {
             .into_rpc(),
         )
         .expect("ws and http servers have distinct method names");
+
+    metrics::init(rpc_module.method_names());
 
     tracing::info!(
         "Listeninig for incoming connections on {}",

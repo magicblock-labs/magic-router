@@ -11,9 +11,9 @@ use futures::{stream::FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc::Receiver, Notify};
 use url::Url;
 
-use crate::pubsub::connection::WebsocketConnection;
+use crate::{metrics, pubsub::connection::WebsocketConnection};
 
-use super::subscription::Subscription;
+use super::{subscription::Subscription, PubSubUpstreamKind};
 
 /// A websocket subscription routing hub. It manages all of the upstream connections
 /// and properly directs subscription requests to provided URLs
@@ -34,6 +34,8 @@ pub struct SubscriptionDispatcher {
 pub struct WsUpstreamState {
     pub is_online: bool,
     pub url: Arc<Url>,
+    /// Fixed metrics classification of this connection pool: chain or ER.
+    pub target: PubSubUpstreamKind,
 }
 
 impl SubscriptionDispatcher {
@@ -50,7 +52,11 @@ impl SubscriptionDispatcher {
         }
     }
 
-    async fn try_spawn_connections(url: Arc<Url>, count: u16) -> (Arc<Url>, Sender<Subscription>) {
+    async fn try_spawn_connections(
+        url: Arc<Url>,
+        count: u16,
+        target: PubSubUpstreamKind,
+    ) -> (Arc<Url>, Sender<Subscription>) {
         static CONNECTION_ID: AtomicU32 = AtomicU32::new(0);
         tracing::info!("spawning new websocket connections to {url}");
         let id = CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
@@ -59,10 +65,11 @@ impl SubscriptionDispatcher {
         // for each upstream, spawn the preconfigured number of connections
         let mut spawned = 0;
         for _ in 0..count {
-            let result = WebsocketConnection::new(id, url.clone(), rx.clone()).await;
+            let result = WebsocketConnection::new(id, url.clone(), rx.clone(), target).await;
             match result {
                 Ok(c) => tokio::spawn(c.run()),
                 Err(error) => {
+                    metrics::error("pubsub");
                     tracing::warn!(%error, "failed to websocket establish connection to {url}");
                     continue;
                 }
@@ -87,7 +94,7 @@ impl SubscriptionDispatcher {
                         continue;
                     }
                     // if upstream is new, spawn new connections to it
-                    connections.push(Self::try_spawn_connections(state.url.clone(), self.connections_per_upstream));
+                    connections.push(Self::try_spawn_connections(state.url.clone(), self.connections_per_upstream, state.target));
                 }
                 Some(request) = self.requests_rx.recv() => {
                     let Some(tx) = self.upstreams.get_mut(&request.destination) else {
