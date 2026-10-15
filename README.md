@@ -312,6 +312,34 @@ ping-interval-sec = 30
 connections-per-upstream = 5
 ```
 
+## Metrics
+
+Prometheus can scrape `GET /metrics` on the router's existing listen address:
+
+```sh
+curl http://127.0.0.1:8080/metrics
+```
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `router_rpc_requests_total` | `method` | Dispatched RPC calls that ended, including cancellation. |
+| `router_rpc_request_duration_seconds` | `method` | RPC processing latency, recorded as fractional seconds with buckets down to 0.1 ms. |
+| `router_errors_total` | `source` | RPC error responses, delegation failures, and subscription failures. Sources are `rpc`, `delegation`, and `pubsub`; this counts error events, not failed requests. |
+| `router_upstream_requests_total` | `target` | Logical HTTP RPC and WebSocket subscribe/unsubscribe sends to `chain` or `er`, including internal requests but excluding pings and retries inside the HTTP sender. |
+| `router_sync_events_total` | `event` | `delegated_update`, `undelegated_update`, `interrupted`, and `terminated` events received from the sync service, including replayed updates. |
+| `router_delegation_transitions_total` | `transition` | `delegated`, `undelegated`, and `redelegated` state changes applied to initialized cache entries. Initial fills, stale updates, and unchanged authorities do not count. |
+| `router_subscriptions` | `kind` | Active client subscription handlers, grouped by `account` or `signature`. |
+| `router_notifications_total` | `kind` | Data notifications successfully sent to clients, grouped by `account` or `signature`; setup-error notifications do not count. |
+
+RPC metrics count individual calls in batches and include subscribe/unsubscribe
+methods. Unsupported method names share the `unknown` label; malformed payloads
+that never reach RPC dispatch are not counted. Scrapes do not count as RPC calls.
+Subscription RPC latency measures acceptance or rejection, not subscription lifetime.
+
+Sync events describe the router's received updates, not network-wide activity.
+`interrupted` means replay continuity was lost and the cache was cleared, not
+every gRPC disconnect. Transitions describe locally applied cache state changes.
+
 ## Deployment
 
 To deploy the router, compile the project in release mode:

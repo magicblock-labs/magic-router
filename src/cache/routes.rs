@@ -26,6 +26,7 @@ use url::Url;
 use crate::{
     cache::transactions::RemoteHandle,
     error::RouterError,
+    metrics,
     pubsub::{
         dispatch::WsUpstreamState,
         notification::{deserialize_account, deserialize_field, PubsubMessage},
@@ -79,6 +80,7 @@ impl RoutingTable {
                     // base chain is always assumed to be online
                     is_online: true,
                     url: u.ws_url.clone(),
+                    target: PubSubUpstreamKind::Chain,
                 })
                 .await;
         }
@@ -211,6 +213,7 @@ impl RoutingTable {
             .send(WsUpstreamState {
                 is_online: matches!(record.status(), ErStatus::Active),
                 url: upstream.ws_url.clone(),
+                target: PubSubUpstreamKind::Ephem,
             })
             .await;
         let _ = self.inner.insert_sync(identity, upstream);
@@ -228,6 +231,7 @@ impl RoutingTable {
             .send(WsUpstreamState {
                 is_online: false,
                 url: upstream.ws_url,
+                target: PubSubUpstreamKind::Ephem,
             })
             .await;
     }
@@ -359,7 +363,8 @@ pub struct UpstreamRecord {
 
 impl UpstreamRecord {
     async fn new_from_url(mut fqdn: Url, info: Option<RouteInfo>) -> Option<Self> {
-        let client = Arc::new(RpcClient::new(fqdn.to_string()));
+        let target = if info.is_some() { "er" } else { "chain" };
+        let client = Arc::new(metrics::client(fqdn.as_str(), target));
         client.get_identity().await.ok()?;
         let scheme = if fqdn.scheme() == "https" {
             "wss"

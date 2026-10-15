@@ -24,6 +24,7 @@ use crate::{
         delegation_record_pda_from_delegated_account, DelegationEntry, PendingDelegationFill,
     },
     config::LaserStreamConfig,
+    metrics,
     types::ParsedDelegationRecord,
 };
 
@@ -286,6 +287,9 @@ impl DelegationsCache {
                         .data
                         .decode()
                         .and_then(ParsedDelegationRecord::from_bytes);
+                    if record.is_none() {
+                        metrics::error("delegation");
+                    }
                     return DelegationEntry {
                         record,
                         slot: context.slot,
@@ -313,6 +317,7 @@ impl DelegationsCache {
         }
 
         tracing::error!(%pda, "All fetch attempts failed");
+        metrics::error("delegation");
         DelegationEntry {
             record: None,
             slot: 0,
@@ -375,6 +380,7 @@ impl DelegationsCache {
     async fn subscribe(&self, account: Pubkey) -> Option<u64> {
         let slot = self.syncer.subscribe(account.to_bytes()).await;
         if slot.is_none() {
+            metrics::error("delegation");
             tracing::error!(%account, "Failed to send subscribe for delegation account, syncer terminated");
         }
         slot
@@ -385,16 +391,23 @@ impl DelegationsCache {
         while let Some(msg) = rx.recv().await {
             match msg {
                 AccountUpdate::Delegated { record, data, slot } => {
+                    metrics::sync_event("delegated_update");
                     let new_record = ParsedDelegationRecord::from_bytes(data);
+                    if new_record.is_none() {
+                        metrics::error("delegation");
+                    }
                     self.update_cached_entry(record.into(), slot, new_record);
                 }
                 AccountUpdate::Undelegated { record, slot } => {
+                    metrics::sync_event("undelegated_update");
                     self.update_cached_entry(record.into(), slot, None);
                 }
                 AccountUpdate::SyncInterrupted => {
+                    metrics::sync_event("interrupted");
                     self.db.clear_async().await;
                 }
                 AccountUpdate::SyncTerminated => {
+                    metrics::sync_event("terminated");
                     // On disconnect, remove entry to prevent serving stale data.
                     // They will be re-fetched on next access.
                     // self.db.remove(&pubkey);
@@ -421,21 +434,25 @@ impl DelegationsCache {
             return;
         }
 
-        let old_status = if cached_entry.record.is_some() {
-            "delegated"
-        } else {
-            "not delegated"
-        };
-        let new_status = if new_record.is_some() {
-            "delegated"
-        } else {
-            "not delegated"
-        };
-
-        if old_status != new_status {
+        let old = cached_entry
+            .record
+            .as_ref()
+            .map(|record| record.authority.0);
+        let new = new_record.as_ref().map(|record| record.authority.0);
+        if old != new {
+            let transition = match (old, new) {
+                (None, _) => "delegated",
+                (_, None) => "undelegated",
+                _ => "redelegated",
+            };
+            // Pending fills have no established baseline. Replayed updates
+            // only count when they change an initialized cache entry.
+            if cached_entry.slot != 0 {
+                metrics::transition(transition);
+            }
             tracing::debug!(
-                %pubkey,
-                "Delegation status changed from '{old_status}' to '{new_status}' at slot {slot}"
+                %pubkey, transition, slot,
+                "Delegation state changed"
             );
         }
 

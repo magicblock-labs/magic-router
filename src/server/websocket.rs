@@ -17,6 +17,7 @@ use crate::{
         delegations::DelegationsCache, routes::RoutingTable, transactions::ForwardedTransactions,
     },
     error::RouterError,
+    metrics,
     pubsub::{
         notification::{PubsubMessage, SubscriptionHandle},
         subscription::{
@@ -122,8 +123,12 @@ impl WebsocketRpcServer for WebsocketServer {
         params: Option<RpcSignatureSubscribeConfig>,
     ) -> SubscriptionResult {
         let sink = pending.accept().await?;
-        let signature = Signature::from_str(&signature).map_err(RouterError::decode_error)?;
+        let signature = Signature::from_str(&signature).map_err(|error| {
+            metrics::error("pubsub");
+            RouterError::decode_error(error)
+        })?;
         let Some(handle) = self.transactions.get(&signature).await else {
+            metrics::error("pubsub");
             let error = RouterError::UnknownTransaction(signature);
             let msg = SubscriptionMessage::from_json(&ErrorObject::from(error))?;
             sink.send(msg).await?;
@@ -143,26 +148,24 @@ impl WebsocketRpcServer for WebsocketServer {
         };
         let _ = self.dispatcher_tx.send(subscription).await;
         let confirmation = pubsub_rx.recv();
-        let result = tokio::time::timeout(UPSTREAM_SUB_CONFIRMATION_TIMEOUT, confirmation).await;
-        let Ok(message) = result else {
-            let error = RouterError::SubscriptionTimetout("signatureSubscribe");
-            let msg = SubscriptionMessage::from_json(&ErrorObject::from(error))?;
-            sink.send(msg).await?;
-            return Ok(());
-        };
-        let handle = if let Some(PubsubMessage::Subscribed(handle)) = message {
-            tracing::debug!(
-                id = handle.request_id.0,
-                %signature,
-                "signature subscription has been confirmed"
-            );
-            handle
-        } else {
-            let error = RouterError::SubscriptionTimetout("signatureSubscribe");
-            let msg = SubscriptionMessage::from_json(&ErrorObject::from(error))?;
-            sink.send(msg).await?;
-            return Ok(());
-        };
+        let handle =
+            match tokio::time::timeout(UPSTREAM_SUB_CONFIRMATION_TIMEOUT, confirmation).await {
+                Ok(Some(PubsubMessage::Subscribed(handle))) => {
+                    tracing::debug!(
+                        id = handle.request_id.0,
+                        %signature,
+                        "signature subscription has been confirmed"
+                    );
+                    handle
+                }
+                _ => {
+                    metrics::error("pubsub");
+                    let error = RouterError::SubscriptionTimetout("signatureSubscribe");
+                    let msg = SubscriptionMessage::from_json(&ErrorObject::from(error))?;
+                    sink.send(msg).await?;
+                    return Ok(());
+                }
+            };
 
         let handler = SignatureSubscriptionHandler {
             signature,
@@ -263,6 +266,7 @@ impl AccountSubscriptionHandler {
     }
 
     async fn run(mut self) {
+        let subscription = metrics::subscription("account");
         tracing::debug!(
             id = self.subscriber_id.0, pubkey=%self.pubkey,
             "starting the account subscription handler"
@@ -307,6 +311,7 @@ impl AccountSubscriptionHandler {
                                 tracing::debug!(id=id.0, "websocket sink for subscription has been closed");
                                 break;
                             }
+                            subscription.notified();
                         }
                         PubsubMessage::Disconnected(id) => {
                             let Some(handle) = self.handles.remove(&id) else {
@@ -357,6 +362,7 @@ impl AccountSubscriptionHandler {
 
 impl SignatureSubscriptionHandler {
     async fn run(mut self) {
+        let subscription = metrics::subscription("signature");
         tracing::debug!(
             signature=%self.signature,
             "starting the signature subscription handler"
@@ -396,6 +402,8 @@ impl SignatureSubscriptionHandler {
                     };
                     if self.sink.send(msg).await.is_err() {
                         tracing::debug!("websocket sink for subscription has been closed");
+                    } else {
+                        subscription.notified();
                     }
                 }
             }

@@ -7,11 +7,13 @@ use jsonrpsee::client_transport::ws::{
     EitherStream, Receiver, Sender, WsHandshakeError, WsTransportClientBuilder,
 };
 use jsonrpsee::core::client::{ReceivedMessage, TransportReceiverT, TransportSenderT};
+use prometheus::IntCounter;
 use tokio::sync::mpsc::Sender as TokioSender;
 use tokio::sync::mpsc::{self, Receiver as TokioReceiver};
 use tokio_util::compat::Compat;
 use url::Url;
 
+use crate::metrics;
 use crate::pubsub::notification::{Notification, SubscriptionHandle, WebsocketMessage};
 use crate::types::{RequestId, SubscriberId, SubscriptionId, UniqueId};
 
@@ -44,6 +46,8 @@ pub struct WebsocketConnection {
     unsubscriptions_tx: TokioSender<Unsubscription>,
     /// Url of this websocket connection
     url: Arc<Url>,
+    /// Logical subscribe/unsubscribe sends, independent of upstream payload tags.
+    requests: IntCounter,
 }
 
 impl WebsocketConnection {
@@ -51,6 +55,7 @@ impl WebsocketConnection {
         id: u32,
         url: Arc<Url>,
         requests_rx: StealingReceiver<Subscription>,
+        target: PubSubUpstreamKind,
     ) -> Result<Self, WsHandshakeError> {
         let (sender, receiver) = WsTransportClientBuilder::default()
             .build(Url::clone(&url))
@@ -69,6 +74,10 @@ impl WebsocketConnection {
             url,
             unsubscriptions_rx,
             unsubscriptions_tx,
+            requests: metrics::upstream(match target {
+                PubSubUpstreamKind::Chain => "chain",
+                PubSubUpstreamKind::Ephem => "er",
+            }),
         })
     }
 
@@ -181,6 +190,7 @@ impl WebsocketConnection {
                         r#"{{ "jsonrpc": "2.0", "id": {}, "method": "{}", "params": [ {} ] }}"#,
                         id.0, u.method, subid
                     );
+                    self.requests.inc();
                     if let Err(error) = self.sender.send(unsubscription).await {
                         tracing::error!(url=%self.url, %error, "failed to send unsubscription request to websocket");
                         if !self.reestablish().await {
@@ -197,6 +207,7 @@ impl WebsocketConnection {
                         "creating new subscription"
                     );
                     self.inflights.insert(s.request_id, s);
+                    self.requests.inc();
                     if let Err(error) = self.sender.send(payload).await {
                         tracing::error!(url=%self.url, %error, "failed to send subscription request to websocket");
                         if !self.reestablish().await {
